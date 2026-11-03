@@ -1,3 +1,4 @@
+import warnings
 from pathlib import Path
 from uuid import UUID
 
@@ -878,3 +879,32 @@ def test_normalize_database_keeps_source_id_without_attributes():
     assert transactions["recipient_id"].tolist() == [_uuid_for(normalizer, "R1")] * 2
     # only donors with attributes become Transactor rows
     assert database["Transactor"]["id"].tolist() == [_uuid_for(normalizer, "555")]
+
+
+def test_normalize_database_combines_rows_keeping_first_non_null_values():
+    """Rows sharing an id merge column by column, and nulls are not conflicts"""
+    with warnings.catch_warnings():
+        # a null in one row and a value in another is not a conflict
+        warnings.simplefilter("error", UserWarning)
+        database, normalizer = _normalize_transactions(
+            {
+                "amount": [1.0, 2.0],
+                # 777 is the donor in the first row and the recipient in the second
+                "donor_id": ["777", "R1"],
+                "donor--full_name": ["Pat", "Cmte"],
+                "donor--phone_number": ["5551234567", None],
+                "donor--party": [None, None],
+                "recipient_id": ["R1", "777"],
+                "recipient--full_name": ["Cmte", "Pat"],
+                "recipient--phone_number": [None, None],
+                "recipient--party": [None, "Green"],
+                "reported_state": ["MN", "MN"],
+            }
+        )
+    transactors = database["Transactor"].set_index("id")
+    assert transactors.index.is_unique
+    pat = transactors.loc[_uuid_for(normalizer, "777")]
+    # phone_number comes from the donor row, party from the recipient row
+    assert pat["full_name"] == "Pat"
+    assert pat["phone_number"] == "5551234567"
+    assert pat["party"] == "Green"
