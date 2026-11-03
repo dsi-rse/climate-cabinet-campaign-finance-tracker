@@ -1,13 +1,20 @@
+import warnings
 from pathlib import Path
 from uuid import UUID
 
 import pandas as pd
 import pytest
 import yaml
+from utils.constants import DEFAULT_SCHEMA_PATH
 from utils.normalize import Normalizer
 from utils.schema import DataSchema
 
 BASE_FILEPATH = Path(__file__).resolve().parent.parent
+
+# uuids standing in for source ids that were already mapped before splitting
+SOURCE_ID_A = "aaaaaaaa-aaaa-4aaa-8aaa-000000000001"
+SOURCE_ID_B = "aaaaaaaa-aaaa-4aaa-8aaa-000000000002"
+RECIPIENT_ID = "708e0a88-c449-432f-b6cf-e11a0c681921"
 
 
 @pytest.fixture()
@@ -480,6 +487,96 @@ def schema_fixture(request, tmp_path):
             None,
             "simple_schema_fixture",
         ),
+        # Two source ids with identical attributes are two entities, not one
+        (
+            "distinct-source-ids-with-same-attributes-stay-distinct",
+            {
+                "donor_id": [SOURCE_ID_A, SOURCE_ID_B],
+                "donor--full_name": ["Bob", "Bob"],
+                "amount": [1, 2],
+                "recipient_id": [RECIPIENT_ID, RECIPIENT_ID],
+                "reported_state": ["CA", "CA"],
+            },
+            "Transaction",
+            "donor",
+            {
+                "donor_id": [SOURCE_ID_A, SOURCE_ID_B],
+                "amount": [1, 2],
+                "recipient_id": [RECIPIENT_ID, RECIPIENT_ID],
+                "reported_state": ["CA", "CA"],
+            },
+            {
+                "id": [SOURCE_ID_A, SOURCE_ID_B],
+                "full_name": ["Bob", "Bob"],
+                "reported_state": ["CA", "CA"],
+            },
+            False,
+            None,
+            "simple_schema_fixture",
+        ),
+        # A source id on a row with no donor attributes is kept, not nulled
+        (
+            "source-id-without-attributes-is-kept",
+            {
+                "donor_id": [SOURCE_ID_A, SOURCE_ID_A, SOURCE_ID_B],
+                "donor--full_name": [None, "Alice", None],
+                "amount": [1, 2, 3],
+                "recipient_id": [RECIPIENT_ID, RECIPIENT_ID, RECIPIENT_ID],
+                "reported_state": ["CA", "CA", "CA"],
+            },
+            "Transaction",
+            "donor",
+            {
+                "donor_id": [SOURCE_ID_A, SOURCE_ID_A, SOURCE_ID_B],
+                "amount": [1, 2, 3],
+                "recipient_id": [RECIPIENT_ID, RECIPIENT_ID, RECIPIENT_ID],
+                "reported_state": ["CA", "CA", "CA"],
+            },
+            {
+                "id": [SOURCE_ID_A],
+                "full_name": ["Alice"],
+                "reported_state": ["CA"],
+            },
+            False,
+            None,
+            "simple_schema_fixture",
+        ),
+        # A row without a source id whose attributes match several source ids
+        # is not attached to any of them; it becomes its own entity
+        (
+            "ambiguous-attribute-match-gets-new-entity",
+            {
+                "donor_id": [None, SOURCE_ID_A, SOURCE_ID_B],
+                "donor--full_name": ["Bob", "Bob", "Bob"],
+                "amount": [1, 2, 3],
+                "recipient_id": [RECIPIENT_ID, RECIPIENT_ID, RECIPIENT_ID],
+                "reported_state": ["CA", "CA", "CA"],
+            },
+            "Transaction",
+            "donor",
+            {
+                "donor_id": [
+                    "00000000-0000-4000-8000-000000000001",
+                    SOURCE_ID_A,
+                    SOURCE_ID_B,
+                ],
+                "amount": [1, 2, 3],
+                "recipient_id": [RECIPIENT_ID, RECIPIENT_ID, RECIPIENT_ID],
+                "reported_state": ["CA", "CA", "CA"],
+            },
+            {
+                "id": [
+                    SOURCE_ID_A,
+                    SOURCE_ID_B,
+                    "00000000-0000-4000-8000-000000000001",
+                ],
+                "full_name": ["Bob", "Bob", "Bob"],
+                "reported_state": ["CA", "CA", "CA"],
+            },
+            False,
+            None,
+            "simple_schema_fixture",
+        ),
     ],
     indirect=["schema_fixture"],
 )
@@ -552,10 +649,9 @@ def test_split_prefixed_columns(
         (
             "relationship-table",
             {
-                "id": [
-                    "00000000-0000-4000-8000-000000000001",
-                    "00000000-0000-4000-8000-000000000002",
-                ],
+                # ids outside the mocked uuid4 sequence, so the organizations'
+                # new ids can't collide with the members'
+                "id": [SOURCE_ID_A, SOURCE_ID_B],
                 "full_name": ["Fake Name", "Other Name"],
                 "employer--organization--full_name": [
                     "Fake Organization",
@@ -568,23 +664,25 @@ def test_split_prefixed_columns(
             {
                 "Transactor": {
                     "id": [
+                        SOURCE_ID_A,
+                        SOURCE_ID_B,
                         "00000000-0000-4000-8000-000000000001",
                         "00000000-0000-4000-8000-000000000002",
-                        "00000000-0000-4000-8000-000000000003",
-                        "00000000-0000-4000-8000-000000000004",
                     ],
-                    "full_name": ["Fake Name", "Other Name", "Fake Name", "Other Name"],
+                    "full_name": [
+                        "Fake Name",
+                        "Other Name",
+                        "Fake Organization",
+                        "Other Organization",
+                    ],
                     "phone_number": [None, None, "1234567890", "1234567890"],
                     "reported_state": ["CA", "CA", "CA", "CA"],
                 },
                 "Membership": {
-                    "member_id": [
+                    "member_id": [SOURCE_ID_A, SOURCE_ID_B],
+                    "organization_id": [
                         "00000000-0000-4000-8000-000000000001",
                         "00000000-0000-4000-8000-000000000002",
-                    ],
-                    "organization_id": [
-                        "00000000-0000-4000-8000-000000000003",
-                        "00000000-0000-4000-8000-000000000004",
                     ],
                     "membership_type": ["Member", "Member"],
                     "reported_state": ["CA", "CA"],
@@ -643,6 +741,12 @@ def test_split_prefixed_columns(
                     "transactor_type_specific": ["Company"],
                     "party": [None],
                     "reported_state": ["AZ"],
+                    # Individual attributes stay on Transactor (single table
+                    # inheritance)
+                    "last_name": ["ASHLEY"],
+                    "first_name": [None],
+                    "middle_name": [None],
+                    "name_suffix": [None],
                 },
                 "Address": {
                     "transactor_id": ["00000000-0000-4000-8000-000000000001"],
@@ -694,7 +798,7 @@ def test_convert_table_to_3NF_from_1NF(
             assert result_database[name].empty, f"Expected table {name} to be empty"
             continue
         expected_table = make_df_standard_for_testing(
-            result_database[name], expected_table.columns
+            expected_table, expected_table.columns
         )
         result_table = make_df_standard_for_testing(
             result_database[name], expected_table.columns
@@ -705,3 +809,102 @@ def test_convert_table_to_3NF_from_1NF(
             check_like=True,
             check_dtype=False,
         )
+
+
+def _normalize_transactions(transactions: dict) -> tuple[dict, Normalizer]:
+    """Normalize a Transaction table with the package schema"""
+    normalizer = Normalizer(
+        {"Transaction": pd.DataFrame(transactions)}, DEFAULT_SCHEMA_PATH
+    )
+    return normalizer.normalize_database(), normalizer
+
+
+def _uuid_for(normalizer: Normalizer, raw_id: str) -> str:
+    """Look up the uuid assigned to a raw Transactor id"""
+    return normalizer.id_mapping[(raw_id, None, "MN", "Transactor")]
+
+
+def test_normalize_database_keeps_source_ids_distinct_and_unique():
+    """Source ids decide entity identity, and each id is one Transactor row"""
+    with pytest.warns(UserWarning, match="1 Transactor id"):
+        database, normalizer = _normalize_transactions(
+            {
+                "amount": [1.0, 2.0, 3.0, 4.0, 5.0],
+                "donor_id": ["111", "111", "222", "333", "R1"],
+                # 111 is reported under two spellings; 222 and 333 share a name
+                "donor--full_name": ["Alice", "Alicia", "Bob", "Bob", "Cmte"],
+                # R1 is a recipient in four rows and a donor in the fifth
+                "recipient_id": ["R1", "R1", "R1", "R1", "111"],
+                "recipient--full_name": ["Cmte", "Cmte", "Cmte", "Cmte", "Alice"],
+                "reported_state": ["MN"] * 5,
+            }
+        )
+    transactions = database["Transaction"]
+    transactors = database["Transactor"].set_index("id")
+
+    # every source id keeps its own entity: Bob 222 and Bob 333 stay apart
+    expected_donors = [
+        _uuid_for(normalizer, raw) for raw in ["111", "111", "222", "333", "R1"]
+    ]
+    expected_recipients = [
+        _uuid_for(normalizer, raw) for raw in ["R1", "R1", "R1", "R1", "111"]
+    ]
+    assert transactions["donor_id"].tolist() == expected_donors
+    assert transactions["recipient_id"].tolist() == expected_recipients
+
+    # one row per id, even though R1 and 111 appear as both donor and recipient
+    assert transactors.index.is_unique
+    assert set(transactors.index) == set(expected_donors)
+    # conflicting spellings for one id keep the first one seen
+    assert transactors.loc[_uuid_for(normalizer, "111"), "full_name"] == "Alice"
+
+
+def test_normalize_database_keeps_source_id_without_attributes():
+    """A source id on a row with no counterparty attributes is not nulled"""
+    database, normalizer = _normalize_transactions(
+        {
+            "amount": [1.0, 2.0],
+            "donor_id": ["444", "555"],
+            "donor--full_name": [None, "Dana"],
+            "recipient_id": ["R1", "R1"],
+            "recipient--full_name": [None, None],
+            "reported_state": ["MN", "MN"],
+        }
+    )
+    transactions = database["Transaction"]
+    assert transactions["donor_id"].tolist() == [
+        _uuid_for(normalizer, "444"),
+        _uuid_for(normalizer, "555"),
+    ]
+    assert transactions["recipient_id"].tolist() == [_uuid_for(normalizer, "R1")] * 2
+    # only donors with attributes become Transactor rows
+    assert database["Transactor"]["id"].tolist() == [_uuid_for(normalizer, "555")]
+
+
+def test_normalize_database_combines_rows_keeping_first_non_null_values():
+    """Rows sharing an id merge column by column, and nulls are not conflicts"""
+    with warnings.catch_warnings():
+        # a null in one row and a value in another is not a conflict
+        warnings.simplefilter("error", UserWarning)
+        database, normalizer = _normalize_transactions(
+            {
+                "amount": [1.0, 2.0],
+                # 777 is the donor in the first row and the recipient in the second
+                "donor_id": ["777", "R1"],
+                "donor--full_name": ["Pat", "Cmte"],
+                "donor--phone_number": ["5551234567", None],
+                "donor--party": [None, None],
+                "recipient_id": ["R1", "777"],
+                "recipient--full_name": ["Cmte", "Pat"],
+                "recipient--phone_number": [None, None],
+                "recipient--party": [None, "Green"],
+                "reported_state": ["MN", "MN"],
+            }
+        )
+    transactors = database["Transactor"].set_index("id")
+    assert transactors.index.is_unique
+    pat = transactors.loc[_uuid_for(normalizer, "777")]
+    # phone_number comes from the donor row, party from the recipient row
+    assert pat["full_name"] == "Pat"
+    assert pat["phone_number"] == "5551234567"
+    assert pat["party"] == "Green"
