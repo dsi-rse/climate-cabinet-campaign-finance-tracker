@@ -25,12 +25,18 @@ includes:
 """
 
 import re
+import warnings
 from pathlib import Path
 
 import pandas as pd
 
 from utils.constants import ID_SUFFIX, SPLIT
-from utils.ids import handle_existing_ids, handle_id_column
+from utils.ids import (
+    get_raw_ids_mask,
+    handle_existing_ids,
+    handle_id_column,
+    replace_null_ids_with_uuids,
+)
 from utils.schema import DataSchema
 
 REPEATING_COLUMN_REGEX = r"^[A-Za-z_]+-\d+$"
@@ -268,70 +274,134 @@ class Normalizer:
                 table[f"{relation_prefix}{SPLIT}{column}"] = value
         return table
 
-    def _merge_existing_forward_relations(
+    @staticmethod
+    def _row_keys(table: pd.DataFrame, columns: list[str]) -> list[tuple]:
+        """Hashable key for each row of table, in order, with every null as None"""
+        values = table[columns].astype(object)
+        values = values.where(values.notna(), None)
+        return list(zip(*(values[column] for column in columns)))
+
+    def _assign_forward_relation_ids(
         self,
         table: pd.DataFrame,
+        extracted_table: pd.DataFrame,
+        extracted_table_name: str,
         relation_prefix: str,
-    ) -> None:
-        """Merges existing and computed foreign key values, raising an error in conflict
+    ) -> tuple[pd.DataFrame, pd.DataFrame]:
+        """Give each extracted entity an id and point the base table's foreign key at it
+
+        Source ids decide identity. Rows with different {relation_prefix}_id values
+        are different entities even when their attributes match, and a
+        {relation_prefix}_id already present in the base table is never replaced.
+        A row with no {relation_prefix}_id is matched by its attributes to the one
+        entity with the same attributes. If no entity, or more than one, has those
+        attributes, the row becomes a new entity rather than a guess.
+
+        Rows are matched by position because the 1NF step can leave duplicate index
+        labels.
 
         Args:
-            table: DataFrame containing {relation_prefix}_id and
-                temp_{relation_prefix}_id.
-            relation_prefix: name of foreign key
-        Raises:
-            ValueError if there exists a row where {relation_prefix}_id and
-                temp_{relation_prefix}_id both exist and are notna
+            table: base table containing the {relation_prefix}--* columns
+            extracted_table: rows of table that describe an entity, after
+                verifiably incomplete rows have been dropped
+            extracted_table_name: name of the table the relation points to
+            relation_prefix: prefix of the forward relation
+
+        Returns:
+            table with {relation_prefix}_id filled in where it was missing, and
+            extracted_table with one row per distinct (id, attributes) and a
+            {relation_prefix}_id for every row
         """
-        conflicting_rows = table[
-            (table[f"{relation_prefix}_id"].notna())
-            & (table[f"temp_{relation_prefix}_id"].notna())
-            & (table[f"{relation_prefix}_id"] != table[f"temp_{relation_prefix}_id"])
-        ]
-        if not conflicting_rows.empty:
-            raise ValueError(
-                f"Erroneous {relation_prefix} ID created\n{conflicting_rows}"
+        id_column = f"{relation_prefix}{ID_SUFFIX}"
+        foreign_columns = self._get_foreign_columns(table, relation_prefix)
+        for frame in (table, extracted_table):
+            if id_column not in frame.columns:
+                frame[id_column] = None
+            # map any raw ids that were not mapped before splitting. In the
+            # pipeline normalize_database has already mapped them, so skip the
+            # row-wise mapping when every id is already a uuid.
+            if get_raw_ids_mask(frame, id_column).any():
+                handle_existing_ids(
+                    frame, extracted_table_name, self.id_mapping, id_column
+                )
+
+        has_source_id = extracted_table[id_column].notna()
+        sourced = extracted_table[has_source_id].drop_duplicates(
+            subset=[id_column, *foreign_columns]
+        )
+        unsourced = extracted_table[~has_source_id].drop_duplicates(
+            subset=foreign_columns
+        )
+
+        source_ids_by_key: dict[tuple, set[str]] = {}
+        for key, source_id in zip(
+            self._row_keys(sourced, foreign_columns), sourced[id_column]
+        ):
+            source_ids_by_key.setdefault(key, set()).add(source_id)
+
+        id_by_key = {}
+        new_entity_positions = []
+        for position, key in enumerate(self._row_keys(unsourced, foreign_columns)):
+            matching_ids = source_ids_by_key.get(key, set())
+            if len(matching_ids) == 1:
+                id_by_key[key] = next(iter(matching_ids))
+            else:
+                new_entity_positions.append(position)
+        new_entities = unsourced.iloc[new_entity_positions].reset_index(drop=True)
+        replace_null_ids_with_uuids(new_entities, id_column)
+        for key, new_id in zip(
+            self._row_keys(new_entities, foreign_columns), new_entities[id_column]
+        ):
+            id_by_key[key] = new_id
+
+        table[id_column] = [
+            existing_id if pd.notna(existing_id) else id_by_key.get(key)
+            for existing_id, key in zip(
+                table[id_column], self._row_keys(table, foreign_columns)
             )
-        table[f"{relation_prefix}_id"] = table[f"{relation_prefix}_id"].fillna(
-            table[f"temp_{relation_prefix}_id"]
-        )
+        ]
+        entity_frames = [frame for frame in (sourced, new_entities) if not frame.empty]
+        if entity_frames:
+            extracted_table = pd.concat(entity_frames, ignore_index=True)
+        else:
+            extracted_table = extracted_table.iloc[0:0]
+        return table, extracted_table
 
-    def _map_column_values_to_ids(
-        self, table: pd.DataFrame, extracted_table: pd.DataFrame, relation_prefix: str
+    def _combine_rows_sharing_an_id(
+        self, table: pd.DataFrame, table_name: str
     ) -> pd.DataFrame:
-        """Map column values to ids in the base table using the extracted table
+        """Combine rows that have the same id into one row
+
+        The same entity can be extracted more than once: as the donor in one
+        transaction and the recipient in another, or reported with different
+        values in different rows. Each column keeps its first non-null value.
+        Ids whose rows disagree on a value are reported in a warning.
 
         Args:
-            table: base table to map column values to ids
-            extracted_table: extracted table to map column values to ids. Must have
-                an 'id' column with valid uuids.
-            relation_prefix: prefix of the foreign key column
+            table: normalized table
+            table_name: name of table, used in the warning
+
+        Returns:
+            table with at most one row per non-null id
         """
-        mapping_columns = [
-            col for col in table.columns if col.startswith(f"{relation_prefix}{SPLIT}")
-        ]
-
-        # Create mapping with normalized keys (replace NaN/NA with None)
-        extracted_table_mapping = {}
-        for _, row in extracted_table.iterrows():
-            key_values = [
-                row[col] if not pd.isna(row[col]) else None for col in mapping_columns
-            ]
-            extracted_table_mapping[tuple(key_values)] = row[
-                f"{relation_prefix}{ID_SUFFIX}"
-            ]
-
-        def get_id_by_column_values(row: pd.Series) -> str | None:
-            """Get the id of a row by its column values"""
-            key_values = [
-                row[col] if not pd.isna(row[col]) else None for col in mapping_columns
-            ]
-            return extracted_table_mapping.get(tuple(key_values))
-
-        table[f"{relation_prefix}_id"] = table[mapping_columns].apply(
-            get_id_by_column_values, axis=1
-        )
-        return table
+        if "id" not in table.columns or not table["id"].dropna().duplicated().any():
+            return table
+        has_id = table["id"].notna()
+        rows_with_id = table[has_id]
+        repeated = rows_with_id[rows_with_id["id"].duplicated(keep=False)]
+        # an id conflicts when any column has more than one distinct value
+        conflicting = (repeated.groupby("id").nunique() > 1).any(axis=1)  # noqa: PD101
+        if conflicting.any():
+            warnings.warn(
+                f"{conflicting.sum()} {table_name} id(s) had rows with conflicting "
+                "values; kept the first non-null value in each column. Example ids: "
+                f"{', '.join(map(str, conflicting[conflicting].index[:5]))}",
+                stacklevel=2,
+            )
+        combined = rows_with_id.groupby("id", sort=False, as_index=False).first()
+        if has_id.all():
+            return combined
+        return pd.concat([combined, table[~has_id]], ignore_index=True)
 
     def _get_foreign_columns(
         self, table: pd.DataFrame, relation_prefix: str
@@ -364,14 +434,17 @@ class Normalizer:
             extracted_table: new foreign table.
             If it is a forward relation:
                 - the extracted table will have an 'id' column with valid uuids.
-                - If there was an existing {relation_prefix}_id column in the base table,
-                  any present ids will be used.
-                - Verifiably incomplete rows are dropped from the extracted table and do
-                  not get an id. Any forward relation to a verifiably incomplete row will
-                  be NaN.
-                - Each unique combination of values
-                Duplicate rows are dropped from the extracted table and get mapped to the
-                same id in the base table.
+                - Existing {relation_prefix}_id values in the base table are kept, and
+                  rows with different ids stay different entities even when their
+                  attributes match. See _assign_forward_relation_ids.
+                - Verifiably incomplete rows are dropped from the extracted table.
+                  Their {relation_prefix}_id in the base table is kept if present,
+                  and is NaN otherwise.
+                - Rows without an id are mapped to the entity with the same attributes
+                  when exactly one exists, and otherwise become a new entity.
+                - The extracted table can hold several rows for one id when that id was
+                  reported with different attributes; convert_to_3NF_from_1NF combines
+                  them.
         """
         # step 0 - get foreign table details (name, schema, columns)
         extracted_table_name = self.get_foreign_table_name(
@@ -399,12 +472,17 @@ class Normalizer:
                 "supposed to be named <relation_prefix>_id in state schemas."
             )
 
-        # step 2 - drop incomplete rows and duplicates
+        # step 2 - drop incomplete rows and duplicates. Forward relations are
+        # deduplicated by id and attributes in step 3 instead.
+        is_forward_relation = (
+            relation_prefix in self.schema.schema[table_name].forward_relations
+        )
         foreign_columns = self._get_foreign_columns(extracted_table, relation_prefix)
         extracted_table = self._drop_verifiably_incomplete_rows(
             extracted_table_name, extracted_table, relation_prefix
         )
-        extracted_table = extracted_table.drop_duplicates(subset=foreign_columns)
+        if not is_forward_relation:
+            extracted_table = extracted_table.drop_duplicates(subset=foreign_columns)
 
         # step 3 - handle ids and metadata columns
         extracted_table[f"{relation_prefix}{SPLIT}reported_state"] = extracted_table[
@@ -414,20 +492,13 @@ class Normalizer:
             extracted_table = self._add_relationship_metadata_to_extracted_table(
                 extracted_table, table_name, relation_prefix
             )
-        elif relation_prefix in self.schema.schema[table_name].forward_relations:
-            handle_id_column(
-                extracted_table,
-                self.schema.schema[table_name],
-                extracted_table_name,
-                self.id_mapping,
-                id_column=f"{relation_prefix}{ID_SUFFIX}",
+        elif is_forward_relation:
+            table, extracted_table = self._assign_forward_relation_ids(
+                table, extracted_table, extracted_table_name, relation_prefix
             )
             extracted_table[f"{relation_prefix}{SPLIT}id"] = extracted_table[
                 f"{relation_prefix}{ID_SUFFIX}"
             ]
-            table = self._map_column_values_to_ids(
-                table, extracted_table, relation_prefix
-            )
         elif "id" in self.schema.schema[extracted_table_name].attributes:
             # If a non-forward relation has an id column, we want to handle it
             # Does this ever happen?
@@ -560,6 +631,10 @@ class Normalizer:
                     ],
                     ignore_index=True,
                 )
+        for normalized_table_name, table in normalized_database.items():
+            normalized_database[normalized_table_name] = (
+                self._combine_rows_sharing_an_id(table, normalized_table_name)
+            )
         self.database = normalized_database
 
     def _consolidate_database(
