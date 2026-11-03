@@ -59,3 +59,7 @@ testpaths = "tests"
 
 [tool.ruff]
 extend-include = ["*.ipynb"]
+
+[tool.coverage.run]
+# measure the package, not the test files
+source = ["utils"]
