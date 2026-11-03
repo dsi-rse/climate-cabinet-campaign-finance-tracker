@@ -12,13 +12,15 @@ For the most consistent installation, the pipeline components can be run using D
 
 ### Local
 
-If you are not using Docker, it is still recommended to use a Python environment to avoid dependency conflicts. Conda is a good option. 
-
-To install in an environment:
+Local installs use [uv](https://docs.astral.sh/uv/getting-started/installation/). From the repository root:
 ```bash
-pip install -r requirements
-pip install -e . 
+uv sync
 ```
+This creates a `.venv` with the Python version in `.python-version` and the exact package versions in `uv.lock`, and installs this package in editable mode. Run commands inside it with `uv run` (for example `uv run cft --help` or `uv run pytest`), or activate it with `source .venv/bin/activate`. To use `--slurm`, install the optional dependency with `uv sync --extra slurm`.
+
+### Changing dependencies
+
+Dependencies are declared in `pyproject.toml` and pinned in `uv.lock`. Use `uv add <package>` (or `uv add --dev <package>` for development tools) and `uv remove <package>` rather than editing the lists by hand, and commit the updated `uv.lock` together with `pyproject.toml`. CI installs with `uv sync --locked`, which fails if the lock is out of date. To upgrade pinned versions, run `uv lock --upgrade` and check that the tests still pass.
 
 ## Use
 
@@ -27,14 +29,14 @@ pip install -e .
 If you have set up with Docker, the quickest way to get started is to use make to interact with Docker. You can run one of the following commands:
 
 ```bash
-make run-collect
-make run-standardize
-make run-normalize
-make run-clean
-make run-link
-make run-classify
+make run-collect-pipeline
+make run-standardize-pipeline
+make run-normalize-pipeline
+make run-clean-pipeline
+make run-link-pipeline
+make run-classify-pipeline
 ```
-To run the step of the pipeline with default options and chunk-size set to 2000.
+Each runs one step of the pipeline with default options. The normalize and clean steps use `--chunk-size 2000`.
 
 If you would like to connect a jupyter lab to the docker container and use python notebooks in your browser:
 
@@ -42,11 +44,11 @@ If you would like to connect a jupyter lab to the docker container and use pytho
 make run-notebooks
 ```
 
-If you would like to run the fully configurable [Command Line Interface](#local--command-line-interface), please run `make interactive` to connect your terminal to the docker container and use the commands below. To exit, type `exit`
+If you would like to run the fully configurable [Command Line Interface](#local--command-line-interface), please run `make run-interactive` to connect your terminal to the docker container and use the commands below. To exit, type `exit`
 
 ### Local / Command Line Interface
 
-If you have completed a local installation, the `cft` command should be accessible to you. This way will provide you with the most configuration options. 
+If you have completed a local installation, run `cft` with `uv run cft`, or as plain `cft` after activating the environment with `source .venv/bin/activate`. This way will provide you with the most configuration options. 
 
 ```bash
 cft collect

@@ -1,45 +1,71 @@
 name: Development Checks
 
 on:
-  # Trigger the workflow on push or pull request,
-  # but only for the main branch
   workflow_dispatch:
   pull_request:
     branches:
       - main
       - dev
+  push:
+    branches:
+      - main
+      - dev
+  # weekly run against upgraded dependencies (see Install Dependencies), so a
+  # breaking release is caught before the next relock. GitHub runs schedules
+  # against the default branch only.
+  schedule:
+    - cron: "0 13 * * 1"
 
 jobs:
   linter:
+    name: checks (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    strategy:
+      # report every version's result instead of cancelling the rest
+      fail-fast: false
+      matrix:
+        # 3.11 matches .python-version and the Docker image. 3.10 is the
+        # requires-python floor. 3.15 is left out until duckdb and rpds-py
+        # publish 3.15 wheels; without them uv compiles duckdb from source.
+        python-version: ["3.10", "3.11", "3.14"]
+    env:
+      # overrides .python-version for uv
+      UV_PYTHON: ${{ matrix.python-version }}
     steps:
 
       - name: Checkout Code Repository
         uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.3.3
         with:
-          python-version: "3.11"
-          cache: pip
-          cache-dependency-path: |
-            requirements.txt
-      - name: Run pre-commit
-        uses: pre-commit/action@v3.0.0
+          # keep in sync with the uv version in the Dockerfile
+          version: "0.13.7"
+          enable-cache: true
       - name: Install Dependencies
         run: |
-          python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          pip install .
+          # The weekly run tests the newest versions uv.lock allows, without
+          # committing them, so upstream breakage shows up before anyone
+          # relocks. Every other run installs exactly what uv.lock pins.
+          # Python comes from UV_PYTHON; the project is installed editable,
+          # so tests and coverage run against src/.
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            uv lock --upgrade
+            uv sync
+          else
+            uv sync --locked
+          fi
       - name: Lint with pre-commit
-        uses: pre-commit/action@v3.0.0
+        # lint results don't depend on the Python version
+        if: matrix.python-version == '3.11'
+        run: uv run pre-commit run --all-files --show-diff-on-failure
       - name: Run Pytest
         run: |
           # coverage run on pytest. If pytest fails, workflow exits in failure
-          coverage run -m pytest --doctest-modules
-          coverage json
-          export TOTAL=$(python -c "import json;print(json.load(open('coverage.json'))['totals']['percent_covered_display'])")
+          uv run coverage run -m pytest --doctest-modules
+          uv run coverage json
+          export TOTAL=$(uv run python -c "import json;print(json.load(open('coverage.json'))['totals']['percent_covered_display'])")
           echo "total=$TOTAL" >> $GITHUB_ENV
-          coverage report -m --format=markdown >> temp.md
+          uv run coverage report -m --format=markdown >> temp.md
           # https://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions#multiline-strings
           {
             echo 'REPORT<<EOF'
@@ -50,15 +76,20 @@ jobs:
       - name: Report Coverage
         uses: actions/github-script@v7
         env:
-          min_coverage: 0
+          # source coverage was 58% when this floor was set; raise it as tests are added
+          min_coverage: 55
         with:
           script: |
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: `${{ env.REPORT }}`
-            })
+            // only pull requests have an issue to comment on, and only one
+            // matrix job comments; every job still enforces min_coverage below
+            if (context.eventName === "pull_request" && "${{ matrix.python-version }}" === "3.11") {
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: `${{ env.REPORT }}`
+              })
+            }
             if ( ${{ env.total }} <= ${{ env.min_coverage }} ) { 
               console.log(
                 "Coverage test failed as code coverage is ${{ env.total }}% and the minimum is ${{ env.min_coverage}}%"

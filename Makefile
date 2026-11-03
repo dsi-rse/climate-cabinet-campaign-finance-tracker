@@ -12,9 +12,10 @@ project_image_name := campaign-finance-tracker
 project_container_name := campaign-finance-tracker-container
 project_dir := $(current_abs_path)
 
-# Build Docker image
+# Build Docker image. The host uid is passed in so files the container writes
+# into the mounted repository belong to the host user.
 build:
-	docker build -t $(project_image_name) -f Dockerfile $(current_abs_path)
+	docker build --build-arg USER_UID=$(shell id -u) -t $(project_image_name) -f Dockerfile $(current_abs_path)
 
 # Helper for running containers
 run-container:
@@ -25,8 +26,7 @@ run-interactive: build
 
 run-notebooks: build
 	docker run --rm -v $(current_abs_path):/project -p 8888:8888 -t $(project_image_name) \
-	jupyter lab --port=8888 --ip='*' --NotebookApp.token='' --NotebookApp.password='' \
-	--no-browser --allow-root
+	jupyter lab --port=8888 --ip=0.0.0.0 --IdentityProvider.token='' --no-browser
 
 run-collect-pipeline: build
 	$(MAKE) run-container cmd="cft collect"

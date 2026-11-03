@@ -103,7 +103,7 @@ docs/_build/
 target/
 
 # pyenv
-.python-version
+# .python-version is tracked: uv uses it to pick the project's Python
 
 # celery beat schedule file
 celerybeat-schedule

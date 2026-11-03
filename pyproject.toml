@@ -6,6 +6,43 @@ build-backend = "setuptools.build_meta"
 requires-python = ">=3.10"
 name = "climate-cabinet-campaign-finance"
 dynamic = ["version"]
+# exact versions are pinned in uv.lock; add or change dependencies with `uv add`
+dependencies = [
+    "beautifulsoup4",
+    # splink 5 removed the DuckDBAPI/db_api interface used in utils.link
+    "splink>=4,<5",
+    # imported directly by utils.database and utils.link
+    "duckdb>=1,<2",
+    "nameparser==1.1.3",
+    "nbformat~=5.9.2",
+    "numpy",
+    "pandas",
+    "plotly",
+    "py7zr",
+    "pyarrow",
+    "python-dotenv",
+    "pyyaml",
+    "requests",
+    "textdistance==4.6.1",
+    "tqdm",
+    "usaddress==0.5.4",
+]
+
+[project.optional-dependencies]
+# needed only for --slurm
+slurm = ["submitit"]
+
+[dependency-groups]
+dev = [
+    "coverage~=7.3",
+    "ipykernel~=6.16",
+    "jupyterlab",
+    "pre-commit~=3.5",
+    "pytest~=7.4",
+    "pytest-mock~=3.14",
+    # keep in sync with the ruff-pre-commit rev in .pre-commit-config.yaml
+    "ruff==0.3.3",
+]
 
 [project.scripts]
 cft = "utils.cli.core:main"
@@ -59,3 +96,7 @@ testpaths = "tests"
 
 [tool.ruff]
 extend-include = ["*.ipynb"]
+
+[tool.coverage.run]
+# measure the package, not the test files
+source = ["utils"]
