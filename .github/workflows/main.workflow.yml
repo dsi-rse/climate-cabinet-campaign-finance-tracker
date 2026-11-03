@@ -24,7 +24,7 @@ jobs:
       - name: Checkout Code Repository
         uses: actions/checkout@v4
       - name: Set up uv
-        uses: astral-sh/setup-uv@v10
+        uses: astral-sh/setup-uv@v10.3.3
         with:
           # keep in sync with the uv version in the Dockerfile
           version: "0.13.7"

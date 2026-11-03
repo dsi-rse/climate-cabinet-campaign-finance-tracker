@@ -12,7 +12,7 @@ jobs:
         with:
           fetch-depth: 0
       - name: Set up uv
-        uses: astral-sh/setup-uv@v10
+        uses: astral-sh/setup-uv@v10.3.3
         with:
           version: "0.13.7"
       - name: Run cocoa
