@@ -1,0 +1,9 @@
+# the image only copies pyproject.toml, uv.lock, .python-version and src/;
+# keep large or local-only directories out of the build context
+.git
+.venv
+data
+local-notes
+exploration
+build
+**/__pycache__

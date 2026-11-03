@@ -14,7 +14,7 @@
                         "path": "/bin/bash"
                     }
                 },
-                "python.defaultInterpreterPath": "/usr/local/bin/python3",
+                "python.defaultInterpreterPath": "/opt/venv/bin/python",
                 "python.languageServer": "Pylance",
                 "[python]": {
                     "diffEditor.ignoreTrimWhitespace": false,
@@ -54,7 +54,7 @@
 	// 		"onAutoForward": "silent"
 	// },
 	// Use 'postCreateCommand' to run commands after the container is created.
-	// "postCreateCommand": "pip3 install -r requirements.txt",
+	// "postCreateCommand": "uv sync --locked",
 	// Comment out to connect as root instead. More info: https://aka.ms/vscode-remote/containers/non-root.
 	"workspaceMount": "source=${localWorkspaceFolder},target=/project,type=bind",
 	"workspaceFolder": "/project"
