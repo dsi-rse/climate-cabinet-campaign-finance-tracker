@@ -27,6 +27,8 @@ splink>=4,<5
 # imported directly by utils.database and utils.link
 duckdb>=1,<2
 tqdm
-pyarrow
+# pyarrow 26 needs numpy 2 at import but does not declare it, and spacy 3.7 (via
+# thinc) caps numpy<2, so pip installs an incompatible pair
+pyarrow<26
 py7zr
 python-dotenv
