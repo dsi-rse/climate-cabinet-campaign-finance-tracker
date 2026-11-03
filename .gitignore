@@ -139,3 +139,6 @@ venv.bak/
 # data files
 *.avro
 data/*.txt
+
+# local scratch
+local-notes/
