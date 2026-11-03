@@ -1,0 +1,477 @@
+base:
+  meta: True
+  state_code: mn
+  read_csv_params:
+    sep: ","
+    on_bad_lines: warn
+    header: 0
+  state_code_columns:
+    - reported_state
+
+contributions:
+  inherits: base
+  table_name: Transaction
+  path_pattern: "^contributions_all.csv$"
+
+  duplicate_columns:
+    donor--transactor_type:
+      - donor--transactor_type_specific
+
+  overloaded_columns:
+    Recipient:
+      filter:
+        "Recipient type":
+          - PCC
+      # last name (everything before the comma)
+      # first name: one or more words (e.g., "Mary Jo")
+      # optional preferred name in () or ""
+      # optional middle name (one or two capital letters)
+      # optional name suffix
+      # office_sought must match one of the fixed options
+      # committee is the last token (no spaces)
+      pattern: '^(?P<generated_last_name>[^,]+),\s+(?P<generated_first_name>(?:[A-Za-z]+\s+)*[A-Za-z]+)(?:\s+(?P<generated_name_preferred>\([^)]*\)|\"[^\"]*\"))?(?:\s+(?P<generated_middle_name>[A-Z]{1,2}))?(?:\s+(?P<generated_name_suffix>(?:Jr\.?|Sr\.?|II|III|IV|V)))?\s+(?P<generated_office_sought>(?:Atty Gen|Sup Court|Dist Court|Sec of State|State Aud|App Court|Senate|House|Gov))\s+(?P<generated_committee>\S+)$'
+
+  enum_mapper:
+    recipient--candidate--member--election_result--election--office_sought:
+      Senate: State Senator
+      House: State Representative
+      Atty Gen: Attorney General
+      Sup Court: Supreme Court Justice
+      Dist Court: Judge
+      Sec of State: Secretary of State
+      State Aud: Auditor General
+      Gov: Governor
+      App Court: Judge
+    recipient--transactor_type:
+      # https://cfb.mn.gov/pdf/quicklinks/what_kind_of_entity.pdf?t=1742908237
+      # https://cfb.mn.gov/pdf/quicklinks/registration_type_selection_flowchart.pdf?t=1742908237
+      PCF: Organization  # Political Committees / Funds
+      PCC: Organization # Principal Campaign Committee / Candidate Committee
+      PTU: Organization # Party Unit
+
+    recipient--transactor_type_specific:
+      IEF: Independent Expenditure Fund
+      IEC: Independent Expenditure Committee
+      PC: Political Committee
+      PCN: Political Committee # N = New
+      PF: Political Fund
+      PFN: Political Fund # N = New
+      BF: Ballot Fund
+      BC: Ballot Committee
+      CAU: Party # Caucus
+      SPU: Party # State Party Unit
+      PCC: Candidate Committee
+
+    donor--transactor_type:
+      Individual: Individual
+      Self: Individual
+      Party Unit: Organization
+      Candidate Committee: Individual
+      Lobbyist: Individual
+      Political Committee/Fund: Organization
+
+    donor--transactor_type_specific:
+      Individual: Individual
+      Self: Candidate
+      Party Unit: Party
+      Candidate Committee: Candidate
+      Lobbyist: Lobbyist
+      Political Committee/Fund: Committee
+
+
+  column_details:
+    - raw_name: "Recipient reg num" 
+      type: Int32
+      standard_name: recipient_id
+
+    - raw_name: "Recipient"
+      type: str
+      standard_name: recipient--full_name
+
+    - raw_name: "Recipient type"
+      type: str
+      standard_name: recipient--transactor_type
+      
+    - raw_name: "Recipient subtype"
+      type: str
+      standard_name: recipient--transactor_type_specific
+
+    - raw_name: Amount 
+      type: Float32
+      standard_name: amount
+
+    - raw_name: "Receipt date"
+      type: str
+      standard_name: date
+      date_format: "%Y-%m-%d"
+
+    - raw_name: Year
+      type: Int16
+      standard_name: reported_election_year
+
+    - raw_name: Contributor
+      type: str
+      standard_name: donor--full_name
+
+    - raw_name: Contrib Reg Num
+      type: Int32
+      standard_name: donor_id
+
+    - raw_name: Contrib type
+      type: str
+      standard_name: donor--transactor_type
+
+    - raw_name: Receipt type
+      type: str
+
+    - raw_name: In kind?
+      type: str
+
+    - raw_name: In-kind descr
+      type: str
+      standard_name: description
+
+    - raw_name: Contrib zip
+      type: str
+      standard_name: donor--address--zipcode
+
+    - raw_name: Contrib Employer name
+      type: str
+      standard_name: donor--employer--organization--full_name
+
+    - raw_name: generated_last_name
+      type: str
+      standard_name: recipient--candidate--member--last_name
+    
+    - raw_name: generated_first_name
+      type: str
+      standard_name: recipient--candidate--member--first_name
+    
+    - raw_name: generated_name_preferred
+      type: str
+      standard_name: recipient--candidate--member--name_preferred
+    
+    - raw_name: generated_middle_name
+      type: str
+      standard_name: recipient--candidate--member--middle_name
+
+    - raw_name: generated_name_suffix
+      type: str
+      standard_name: recipient--candidate--member--name_suffix
+
+    - raw_name: generated_office_sought
+      type: str
+      standard_name: recipient--candidate--member--election_result--election--office_sought
+
+  column_order:
+    - "Recipient reg num"
+    - "Recipient"
+    - "Recipient type"
+    - "Recipient subtype"
+    - "Amount"
+    - "Receipt date"
+    - "Year"
+    - "Contributor"
+    - "Contrib Reg Num"
+    - "Contrib type"
+    - "Receipt type"
+    - "In kind?"
+    - "In-kind descr"
+    - "Contrib zip"
+    - "Contrib Employer name"
+
+
+expenditures:
+  inherits: base
+  table_name: Transaction
+  path_pattern: "^expenditures_all.csv$"
+
+  overloaded_columns:
+    "Committee name":
+      filter:
+        "Entity type":
+          - PCC
+      pattern: '^(?P<generated_last_name>[^,]+),\s+(?P<generated_first_name>(?:[A-Za-z]+\s+)*[A-Za-z]+)(?:\s+(?P<generated_name_preferred>\([^)]*\)|\"[^\"]*\"))?(?:\s+(?P<generated_middle_name>[A-Z]{1,2}))?(?:\s+(?P<generated_name_suffix>(?:Jr\.?|Sr\.?|II|III|IV|V)))?\s+(?P<generated_office_sought>(?:Atty Gen|Sup Court|Dist Court|Sec of State|State Aud|App Court|Senate|House|Gov))\s+(?P<generated_committee>\S+)$'
+  
+  filter:
+    Type:
+      NOT:
+        - "Contribution"
+
+  enum_mapper:
+    donor--candidate--member--election_result--election--office_sought:
+      Senate: State Representative
+      House: State Senator
+      Atty Gen: Attorney General
+      Sup Court: Supreme Court Justice
+      Dist Court: Judge
+      Sec of State: Secretary of State
+      State Aud: Auditor General
+      Gov: Governor
+      App Court: Judge
+    donor--transactor_type:
+      PCF: Organization # Political Committees / Funds
+      PTU: Organization # Party Unit
+      PCC: Organization # Principal Campaign Committee / Candidate Committee
+
+    donor--transactor_type_specific:
+      IEF: Independent Expenditure Fund
+      IEC: Independent Expenditure Committee
+      PC: Political Committee
+      PCN: Political Committee # N = New
+      PF: Political Fund
+      PFN: Political Fund # N = New
+      BF: Ballot Fund
+      BC: Ballot Committee
+      BCN: Ballot Committee # N = New
+      CAU: Party # Caucus
+      SPU: Party # State Party Unit
+      PCC: Candidate Committee
+
+
+  column_details:
+    - raw_name: "Committee reg num" 
+      type: Int32
+      standard_name: donor_id
+
+    - raw_name: "Committee name"
+      type: str
+      standard_name: donor--full_name
+
+    - raw_name: "Entity type"
+      type: str
+      standard_name: donor--transactor_type
+      
+    - raw_name: "Entity sub-type"
+      type: str
+      standard_name: donor--transactor_type_specific
+
+    - raw_name: Vendor name
+      type: str
+      standard_name: recipient--name
+
+    - raw_name: Vendor address 1  
+      type: str
+      standard_name: recipient--address--line_1
+      
+    - raw_name: Vendor address 2
+      type: str
+      standard_name: recipient--address--line_2
+      
+    - raw_name: Vendor city
+      type: str
+      standard_name: recipient--address--city
+      
+    - raw_name: Vendor state
+      type: str
+      standard_name: recipient--address--state
+      
+    - raw_name: Vendor zip
+      type: str
+      standard_name: recipient--address--zipcode
+
+    - raw_name: Amount 
+      type: Float32
+      standard_name: amount
+
+    - raw_name: Unpaid amount
+      type: Float32
+
+    - raw_name: Date
+      type: str
+      standard_name: date
+      date_format: "%Y-%m-%d"
+
+    - raw_name: Purpose
+      type: str
+      standard_name: description
+
+    - raw_name: Year
+      type: Int16
+      standard_name: reported_election_year
+
+    - raw_name: Type
+      type: str
+      standard_name: transaction_type
+
+    - raw_name: In-kind descr
+      type: str
+
+    - raw_name: In kind?
+      type: str
+
+    - raw_name: Affected committee name
+      type: str
+
+    - raw_name: Affected committee reg num
+      type: Int32
+      standard_name: recipient_id
+
+    - raw_name: generated_last_name
+      type: str
+      standard_name: donor--candidate--member--last_name
+    
+    - raw_name: generated_first_name
+      type: str
+      standard_name: donor--candidate--member--first_name
+    
+    - raw_name: generated_name_preferred
+      type: str
+      standard_name: donor--candidate--member--name_preferred
+    
+    - raw_name: generated_middle_name
+      type: str
+      standard_name: donor--candidate--member--middle_name
+
+    - raw_name: generated_name_suffix
+      type: str
+      standard_name: donor--candidate--member--name_suffix
+
+    - raw_name: generated_office_sought
+      type: str
+      standard_name: donor--candidate--member--election_result--election--office_sought
+
+  column_order:
+    - "Committee reg num"
+    - "Committee name"
+    - "Entity type"
+    - "Entity sub-type"
+    - "Vendor name"
+    - "Vendor address 1"
+    - "Vendor address 2"
+    - "Vendor city"
+    - "Vendor state"
+    - "Vendor zip"
+    - "Amount"
+    - "Unpaid amount"
+    - "Date"
+    - "Purpose"
+    - "Year"
+    - "Type"
+    - "In-kind descr"
+    - "In kind?"
+    - "Affected committee name"
+    - "Affected committee reg num"
+
+
+independent_expenditures:
+  inherits: expenditures
+  path_pattern: "^independent_expenditures_all.csv$"
+
+  overloaded_columns:
+    "Affected Comte Name":
+      pattern: '^(?P<generated_last_name>[^,]+),\s+(?P<generated_first_name>(?:[A-Za-z]+\s+)*[A-Za-z]+)(?:\s+(?P<generated_name_preferred>\([^)]*\)|\"[^\"]*\"))?(?:\s+(?P<generated_middle_name>[A-Z]{1,2}))?(?:\s+(?P<generated_name_suffix>(?:Jr\.?|Sr\.?|II|III|IV|V)))?\s+(?P<generated_office_sought>(?:Atty Gen|Sup Court|Dist Court|Sec of State|State Aud|App Court|Senate|House|Gov))\s+(?P<generated_committee>\S+)$'
+
+  enum_mapper:
+    affected_party--election_result--election--office_sought:
+      Senate: State Representative
+      House: State Senator
+      Atty Gen: Attorney General
+      Sup Court: Supreme Court Justice
+      Dist Court: Judge
+      Sec of State: Secretary of State
+      State Aud: Auditor General
+      Gov: Governor
+      App Court: Judge
+    donor--transactor_type:
+      PCF: Organization # Political Committees / Funds
+      PTU: Organization # Party Unit
+
+    donor--transactor_type_specific:
+      IEF: Independent Expenditure Fund
+      IEC: Independent Expenditure Committee
+      PC: Political Committee
+      PCN: Political Committee # N = New
+      PF: Political Fund
+      PFN: Political Fund # N = New
+      BF: Ballot Fund
+      BC: Ballot Committee
+      CAU: Party # Caucus
+      SPU: Party # State Party Unit
+      PCC: Candidate Committee
+
+    influence_type:
+      For: positive
+      Against: negative
+
+  column_details:
+    - raw_name: "Spender name"
+      type: str
+      standard_name: donor--full_name
+
+    - raw_name: "Spender reg num" 
+      type: Int32
+      standard_name: donor_id
+
+    - raw_name: "Spender type"
+      type: str
+      standard_name: donor--transactor_type
+      
+    - raw_name: "Spender sub-type"
+      type: str
+      standard_name: donor--transactor_type_specific
+
+    - raw_name: "Affected Comte Name"
+      type: str
+      standard_name: affected_party--full_name
+
+    - raw_name: "Affected Comte Reg Num"
+      type: Int32
+      standard_name: affected_party_id
+
+    - raw_name: "For /Against"
+      type: str
+      standard_name: influence_type
+
+    - raw_name: "Date"
+      type: str
+      standard_name: date
+      date_format: "%Y-%m-%d"
+
+    - raw_name: generated_last_name
+      type: str
+      standard_name: affected_party--last_name
+    
+    - raw_name: generated_first_name
+      type: str
+      standard_name: affected_party--first_name
+
+    - raw_name: generated_name_preferred
+      type: str
+      standard_name: affected_party--name_preferred
+
+    - raw_name: generated_middle_name
+      type: str
+      standard_name: affected_party--middle_name
+
+    - raw_name: generated_name_suffix
+      type: str
+      standard_name: affected_party--name_suffix
+
+    - raw_name: generated_office_sought
+      type: str
+      standard_name: affected_party--election_result--election--office_sought
+    
+
+  column_order:
+    - Spender name
+    - Spender Reg Num
+    - Spender type
+    - Spender sub-type
+    - Affected Comte Name
+    - Affected Cmte Reg Num
+    - For /Against
+    - Year
+    - Date
+    - Type
+    - Amount
+    - Unpaid amount
+    - In kind?
+    - In kind descr
+    - Purpose
+    - Vendor name
+    - Vendor address 1
+    - Vendor address 2
+    - Vendor city
+    - Vendor State
+    - Vendor zip

@@ -1,0 +1,57 @@
+Transactor:
+  child_tables: ["Individual", "Organization"]
+  required_attributes: ["id"]
+  attributes: ["id", "full_name", "transactor_type_specific", "transactor_type", "phone_number", "reported_state"]
+  enum_columns:
+    transactor_type: ["Individual", "Organization"]
+    transactor_type_specific: ["Lobbyist", "Candidate", "Vendor", "Corporation", "Non-profit", "Committee", "Party"]
+  reverse_relations:
+    address: Address
+  reverse_relation_names:
+    address: transactor_id
+
+Individual:
+  parent_table: Transactor
+  attributes: ["first_name", "middle_name", "last_name", "name_suffix", "name_prefix", "name_preferred", "occupation", "party"]
+  reverse_relations:
+    employer: Membership
+    election_result: ElectionResult
+  reverse_relation_names:
+    employer: member_id
+    election_result: candidate_id
+
+Organization:
+  parent_table: Transactor
+  attributes: ["naics", "sic", "stock_symbol"]
+
+Transaction:
+  required_attributes: ["amount", "donor_id", "recipient_id"]
+  attributes: ["id", "amount", "date", "transaction_type", "description", "reported_election_id", "donor_id", "recipient_id", "reported_state"]
+  forward_relations:
+    donor: Transactor
+    recipient: Transactor
+    reported_election: Election
+  repeating_columns: ["amount", "transaction_type", "date", "description"]
+  enum_columns:
+    transaction_type: ["contribution"]
+
+Address:
+  attributes: ["transactor_id", "city", "state", "reported_state"]
+  forward_relations:
+    transactor: Transactor
+
+Membership:
+  attributes: ["member_id", "organization_id", "reported_state"]
+  forward_relations:
+    member: Individual
+    organization: Organization
+
+Election:
+  required_attributes: ["year", "district", "office_sought", "state"]
+  attributes: ["id", "year", "district", "office_sought", "state", "reported_state"]
+
+ElectionResult:
+  attributes: ["candidate_id", "election_id", "votes_received", "win", "reported_state"]
+  forward_relations:
+    candidate: Individual
+    election: Election

@@ -138,7 +138,12 @@ venv.bak/
 
 # data files
 *.avro
-data/*.txt
+data/
+old/
+output/
+
+# exploration
+exploration/
 
 # local scratch
 local-notes/

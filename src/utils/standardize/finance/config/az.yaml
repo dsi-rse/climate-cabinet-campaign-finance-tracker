@@ -1,0 +1,1036 @@
+base:
+  state_code: az
+  state_code_columns:
+    - reported_state
+  read_csv_params:
+    header: 0
+  meta: True
+
+  enum_mapper:
+    transaction_type:
+      # TransactionTypeID: standard_name  # TransactionTypeName
+      "1": "contribution"  # Contribution from Candidate or Family
+      "2": "contribution"  # Contribution from Individuals
+      "3": "contribution"  # Contribution from Committee
+      "4": "contribution"  # Contribution from Business
+      "5": "contribution"  # In-State Contributions $100 or Less
+      "6": "in_kind_contribution"  # In-Kind Cont. Candidate or Family
+      "7": "in_kind_contribution"  # In-Kind Cont. from Individual
+      "8": "in_kind_contribution"  # In-Kind Contribution from Committee
+      "9": "in_kind_contribution"  # Business In-Kind Contribution
+      "10": "contribution"  # CCEC $5 Qualifying Contribution
+      "11": "contribution"  # Aggregate CCEC $5 Qualifying Contributions
+      "12": "contribution"  # Receive CCEC Funding
+      "13": "other"  # Receive Interest/Dividends
+      "14": "other"  # Receive Shared Expense Payment from Committee
+      "15": "other"  # Other Income
+      "16": "loan"  # Receive Loan from Candidate or Family Member
+      "17": "loan"  # Receive Loan from Individual
+      "18": "loan"  # Receive Loan from a Committee
+      "19": "loan"  # Receive Loan from a Business
+      "20": "other"  # Transfer in Surplus from Prev Committee
+      "21": "other"  # Transfer Out Remaining Debt
+      "22": "refund"  # Rebate or Refund from Operating Expense
+      "23": "other"  # Receive Credit - Operating Expense Bill
+      "24": "refund"  # Rebate or Refund from Independent Expenditure
+      "25": "other"  # Receive Credit - Independent Expenditure Bill
+      "26": "refund"  # Refund From Contribution to Committee
+      "27": "refund"  # Rebate or Refund From Other Expenses
+      "28": "other"  # Receive Credit - Other Expenses Bill
+      "29": "loan_payment"  # Receive Loan Payment
+      "30": "other"  # Receive Credit - Previous Committee Debt
+      "31": "expense"  # Operating Expense - Pay Cash/Check
+      "32": "expense"  # Operating Expense - Purchase on Terms/Credit
+      "33": "expense"  # Independent Expenditure - Pay Cash/Check
+      "34": "expense"  # Independent Expenditure - Purchase on Terms/Credit
+      "35": "expense"  # Contribute to another Committee
+      "36": "expense"  # Pay Another Committee for Shared Expense
+      "37": "expense"  # Other Expenses - Pay Cash/Check
+      "38": "expense"  # Other Expenses - Purchase on Terms/Credit
+      "39": "loan"  # Lend to Committee
+      "40": "other"  # Transfer In Previous Committee Debt
+      "41": "other"  # Dispose of Remaining Surplus
+      "42": "refund"  # Refund Candidate or Family Contribution
+      "43": "refund"  # Refund Contribution from Individual
+      "44": "refund"  # Refund Contribution from Committee
+      "45": "refund"  # Refund Business Contribution
+      "46": "refund"  # Refund Contribution Less than $50
+      "47": "refund"  # Refund Candidate/Family In-Kind Contribution
+      "48": "refund"  # Refund Individual In-Kind Contribution
+      "50": "refund"  # Refund Business In-Kind Contribution
+      "51": "expense"  # Expend Candidate/Family In-Kind Contribution
+      "52": "expense"  # Expend Individual In-Kind Contribution
+      "53": "expense"  # Expend In-Kind Contribution from Committee
+      "54": "expense"  # Expend Business In-Kind Contribution
+      "55": "refund"  # Refund CCEC $5 Qualifying Contribution
+      "56": "other"  # Submit $5 Qualifying Contributions to SOS
+      "57": "refund"  # Refund CCEC Funding
+      "58": "refund"  # Refund Other Income
+      "59": "loan_payment"  # Payment on Candidate/Family Loan
+      "60": "loan_payment"  # Payment on Individual Loan
+      "61": "loan_payment"  # Payment on Committee Loan
+      "62": "loan_payment"  # Payment on Business Loan
+      "63": "in_kind_contribution"  # Candidate/Family In-Kind Cont.
+      "64": "in_kind_contribution"  # Individual In-Kind Contribution
+      "65": "in_kind_contribution"  # In-Kind Contribution from Committee
+      "66": "in_kind_contribution"  # Business In-Kind Contribution
+      "67": "other"  # Accrue Interest - Candidate/Family Loan
+      "68": "other"  # Receive Forgiveness on Candidate/Family Loan
+      "70": "other"  # Recieve Forgiveness on Individual Loan
+      "75": "expense"  # Pay a Bill - Operating Expenses
+      "76": "expense"  # Pay a Bill - Independent Expenditure
+      "77": "expense"  # Pay a Bill - Other Expenses
+      "79": "expense"  # Pay a Bill - Previous Debt
+      "80": "refund"  # Refund of Transfer To Another Committee (Legacy)
+      "81": "refund"  # Refund of Bill Payment (Legacy)
+      "87": "refund"  # Refund Interest and Dividends (Legacy)
+      "88": "refund"  # Refund of Transfer From Committee (Legacy)
+      "89": "other"  # Retract Surplus from Previous Committee (Legacy)
+      "98": "expense"  # Expend Personal In-Kind Contribution
+      "99": "expense"  # Expend Individual In-Kind Contribution
+      "100": "expense"  # Expend In-Kind Contribution from Committee
+      "101": "expense"  # Expend Business In-Kind Contribution
+      "102": "other"  # Subvendor Entry
+      "103": "other"  # Subvendor Entry
+      "106": "other"  # Subvendor Entry
+      "108": "other"  # Transfer Out Primary to General
+      "109": "other"  # Transfer In Primary to General
+      "110": "other"  # Transfer Out General to Primary
+      "111": "other"  # Transfer In General to Primary
+      "114": "contribution"  # Contributions from Candidate Committees
+      "115": "contribution"  # Contributions from PACs
+      "116": "contribution"  # Contributions from Parties
+      "117": "contribution"  # Contributions from Partnerships
+      "118": "contribution"  # Contributions from Corps and LLCs
+      "119": "contribution"  # Contributions from Labor Organizations
+      "120": "other"  # Non-Contribution Income
+      "121": "loan"  # Receive Loans from Candidate Committees
+      "122": "loan"  # Receive Loans from PACs
+      "123": "loan"  # Receive Loans from Parties
+      "124": "loan"  # Receive Loans from Partnerships
+      "125": "loan"  # Receive Loans from Corps and LLCs
+      "127": "loan"  # Receive Non-Influencing Loans
+      "128": "refund"  # Refund Contributions from Candidate Committees
+      "129": "refund"  # Refund Contributions from PACs
+      "130": "refund"  # Refund Contributions from Parties
+      "131": "refund"  # Refund Contributions from Partnerships
+      "132": "refund"  # Refund Contributions from Corps and LLCs
+      "133": "refund"  # Refund Contributions from Labor Organizations
+      "140": "refund"  # Refund Non-Contribution In-Kind Income
+      "141": "expense"  # Expend Candidate Committee In-Kind Contrib
+      "142": "expense"  # Expend PAC In-Kind Contribution
+      "143": "expense"  # Expend Party In-Kind Contribution
+      "145": "expense"  # Expend Corp and LLC In-Kind Contribution
+      "146": "expense"  # Expend Labor Org In-Kind Contribution
+      "148": "refund"  # Refund Non-Contribution Income
+      "149": "loan_payment"  # Payment on Candidate Committees loan
+      "150": "loan_payment"  # Payment on PACs loan
+      "151": "loan_payment"  # Payment on Parties loan
+      "153": "loan_payment"  # Payment on Corps and LLCs loan
+      "155": "loan_payment"  # Payment on Non-Influencing Loan
+      "156": "in_kind_contribution"  # Candidate Committee In-Kind Contrib
+      "157": "in_kind_contribution"  # PAC In-Kind Contribution
+      "158": "in_kind_contribution"  # Party In-Kind Contribution
+      "160": "in_kind_contribution"  # Corp and LLC In-Kind Contribution
+      "161": "in_kind_contribution"  # Labor Org In-Kind Contribution
+      "162": "other"  # Non-Contribution In-Kind Income
+      "164": "other"  # Recieve Forgiveness on Candidate Committee Loans
+      "172": "other"  # Recieve Forgiveness on Corp/LLC Loans
+      "177": "expense"  # Expend Candidate Committee In-Kind Contrib
+      "178": "expense"  # Expend PAC In-Kind Contribution
+      "179": "expense"  # Expend Party In-Kind Contribution
+      "181": "expense"  # Expend Corp and LLC In-Kind Contribution
+      "182": "expense"  # Expend Labor Org In-Kind Contribution
+      "183": "expense"  # Expend Non-Contribution In-Kind Income
+      "184": "in_kind_contribution"  # Candidate Committee In-Kind Contrib
+      "185": "in_kind_contribution"  # PAC In-Kind Contribution
+      "186": "in_kind_contribution"  # Party In-Kind Contribution
+      "187": "in_kind_contribution"  # Partnership In-Kind Contribution
+      "188": "in_kind_contribution"  # Corp and LLC In-Kind Contribution
+      "189": "in_kind_contribution"  # Labor Org In-Kind Contribution
+      "190": "other"  # Non-Contribution In-Kind Income
+      "215": "expense"  # Ind. Expend. (Non-Recall) - cash
+      "216": "refund"  # Refund Ind. Expend. (Non-Recall) - cash
+      "217": "expense"  # Ind. Expend. (Non-Recall) - credit
+      "218": "other"  # Rec. Credit - Ind. Expend. (Non-Recall) bill
+      "219": "expense"  # Ballot Measure Expend. - Pay Cash/Check
+      "220": "refund"  # Refund Ballot Measure Expend. - Pay Cash/Check
+      "221": "expense"  # Ballot Measure Expend. - Purchase on Terms/Credit
+      "223": "expense"  # Recall Ind. Expend. - Pay Cash/Check
+      "224": "refund"  # Refund Recall Ind. Expend. - Pay Cash/Check
+      "225": "expense"  # Recall Ind. Expend. - Purchase on Terms/Credit
+      "227": "expense"  # Small Expenses (Paid Cash)
+      "228": "refund"  # Refund of Small Cash Expense
+      "229": "expense"  # Small Expenses (Paid Credit)
+      "231": "expense"  # Contribute to a Candidate Committee
+      "232": "expense"  # Contribute to a PAC
+      "233": "expense"  # Contribute to a Party
+      "234": "expense"  # Give money to a Partnership
+      "235": "expense"  # Give money to a Corporation/LLC
+      "236": "expense"  # Give money to a Labor Organization
+      "237": "refund"  # Refund from Contrib to a Cand Committee
+      "238": "refund"  # Refund from Contribution to a PAC
+      "239": "refund"  # Refund from Contribution to a Party
+      "241": "refund"  # Refund from Giving Money to a Corp/LLC
+      "243": "expense"  # Pay a Bill - Independent Expenditure
+      "244": "expense"  # Pay a Bill - Ballot Measure Expenditure
+      "245": "loan"  # Loan to an Individual
+      "252": "other"  # Forgive a Loan to an Individual
+      "266": "other"  # Receive Payment-Loan to Individual
+      "273": "expense"  # Pay a Bill - Expenses less than $250
+      "274": "expense"  # Pay a Bill - Recall Independent Expenditure
+      "281": "expense"  # In-Kind Contribution to Cand Comms
+      "282": "expense"  # In-Kind Contribution to PACs
+      "283": "expense"  # In-Kind Contribution to Parties
+      "284": "expense"  # In-Kind Contribution to Partnerships
+      "285": "expense"  # In-Kind Contribution to Corps and LLCs
+      "286": "expense"  # In-Kind Contribution to Labor Orgs
+
+    transactor_type:
+      # EntityTypeID: EntityTypeName -> standard_name
+      "1": "Individual"  # Individual
+      "2": "Organization"  # Legacy Names Claimed as Committees
+      "3": "Organization"  # Business
+      "6": "Organization"  # Names used by Committees
+      "10": "Organization"  # Candidate (not participating in Clean Elections)
+      "11": "Organization"  # Candidate (participating in Clean Elections)
+      "12": "Organization"  # Candidate (Exploratory)
+      "13": "Organization"  # $500 Threshold (Candidate)
+      "15": "Organization"  # Support/Oppose (Candidate)
+      "16": "Organization"  # Independent Exp. (Standing) (Multicandidate PAC)
+      "20": "Organization"  # Segregated Fund (Multicandidate PAC)
+      "22": "Organization"  # Segregated Fund (Standing) (Multicandidate PAC)
+      "29": "Organization"  # Political Party
+      "30": "Organization"  # Political Party (Standing)
+      "32": "Organization"  # New Party
+      "33": "Organization"  # Political Action Committee (Legacy)
+      "35": "Organization"  # Non-Arizona Committee
+      "37": "Organization"  # Independent Expenditures (Corp/LLC/Labor Org)
+      "38": "Individual"  # Independent Expenditures (Individual)
+      "39": "Organization"  # Political Action Committee
+      "40": "Organization"  # Political Action Committee (Standing)
+      "41": "Organization"  # Political Action Committee (Mega)
+      "42": "Organization"  # Political Action Committee (Mega Standing)
+      "44": "Organization"  # Business Vendor
+      "45": "Organization"  # Corps/LLCs as Contributors
+      "46": "Organization"  # Labor Orgs as Contributors
+      "47": "Organization"  # Non-Arizona Candidate Committee
+      "48": "Organization"  # Non-Arizona PAC
+      "49": "Organization"  # Non-Arizona Party
+
+    transactor_type_specific:
+      # EntityTypeID: EntityTypeName -> standard_name
+      "1": "Individual"  # Individual
+      "2": "Committee"  # Legacy Names Claimed as Committees
+      "3": "Company"  # Business
+      "4": "Other"  # Qualifying
+      "6": "Committee"  # Names used by Committees
+      "10": "Candidate Committee"  # Candidate (not participating in Clean Elections)
+      "11": "Candidate Committee"  # Candidate (participating in Clean Elections)
+      "12": "Candidate Committee"  # Candidate (Exploratory)
+      "13": "Candidate Committee"  # $500 Threshold (Candidate)
+      "14": "Other"  # $500 Threshold (Non-Candidate)
+      "15": "Candidate Committee"  # Support/Oppose (Candidate)
+      "16": "Committee"  # Independent Exp. (Standing) (Multicandidate PAC)
+      "17": "Other"  # Support/Oppose (Ballot Measure)
+      "18": "Other"  # Recall
+      "19": "Other"  # Segregated Fund
+      "20": "Committee"  # Segregated Fund (Multicandidate PAC)
+      "21": "Other"  # Segregated Fund (Standing)
+      "22": "Committee"  # Segregated Fund (Standing) (Multicandidate PAC)
+      "23": "Other"  # Independent Expenditures
+      "24": "Other"  # Independent Expenditures (Multicandidate PAC)
+      "25": "Other"  # Independent Expenditures (Standing)
+      "27": "Other"  # Political Organization
+      "28": "Other"  # Political Organization (Standing)
+      "29": "Party"  # Political Party
+      "30": "Party"  # Political Party (Standing)
+      "31": "Other"  # Officeholder Expenses
+      "32": "Party"  # New Party
+      "33": "Committee"  # Political Action Committee (Legacy)
+      "35": "Committee"  # Non-Arizona Committee
+      "36": "Other"  # Support/Oppose (Special Election Ballot Measure)
+      "37": "Company"  # Independent Expenditures (Corp/LLC/Labor Org)
+      "38": "Individual"  # Independent Expenditures (Individual)
+      "39": "Committee"  # Political Action Committee
+      "40": "Committee"  # Political Action Committee (Standing)
+      "41": "Committee"  # Political Action Committee (Mega)
+      "42": "Committee"  # Political Action Committee (Mega Standing)
+      "43": "Other"  # Partnership
+      "44": "Company"  # Business Vendor
+      "45": "Company"  # Corps/LLCs as Contributors
+      "46": "Other"  # Labor Orgs as Contributors
+      "47": "Candidate"  # Non-Arizona Candidate Committee
+      "48": "Committee"  # Non-Arizona PAC
+      "49": "Party"  # Non-Arizona Party
+
+    address--county:
+      "1": "Apache"
+      "2": "Cochise"
+      "3": "Coconino"
+      "4": "Gila"
+      "5": "Graham"
+      "6": "Greenlee"
+      "7": "La Paz"
+      "8": "Maricopa"
+      "9": "Mohave"
+      "10": "Navajo"
+      "11": "Pima"
+      "12": "Pinal"
+      "13": "Santa Cruz"
+      "14": "Yavapai"
+      "15": "Yuma"
+
+
+
+
+advanced_search_transactions:
+  inherits: base
+  path_pattern: "^AdvancedSearch/(BallotMeasures|Income|Expenditures|IndependentExpenditures)-.*\\.csv$"
+  table_name: Transaction
+
+  column_details:
+    - raw_name: "TransactionDate"
+      type: str
+      standard_name: date
+      date_format: "/Date(%unix_ms)/"
+
+    - raw_name: "CommitteeID"
+      type: Int64
+      standard_name: recipient_id
+
+    - raw_name: "CommitteeName"
+      type: str
+      standard_name: recipient--full_name
+
+    - raw_name: "CommitteeGroupNumber"
+      type: Int32
+
+    - raw_name: "Amount"
+      type: Float32
+      standard_name: amount
+
+    - raw_name: "TransactionName"
+      type: str
+      standard_name: donor--full_name
+
+    - raw_name: "TransactionType"
+      type: str
+
+    - raw_name: "TransactionNameID"
+      type: Int64
+      description: "Should presumable be the ID of the non-filing party. In experience always 0."
+
+    - raw_name: "TransactionGroupNumber"
+      type: Int32
+
+    - raw_name: "TransactionTypeDispositionID"
+      type: Int32
+
+    - raw_name: "Occupation"
+      type: str
+      standard_name: donor--employer--role
+
+    - raw_name: "Employer"
+      type: str
+      standard_name: donor--employer--organization--full_name
+
+    - raw_name: "City"
+      type: str
+      standard_name: donor--address--city
+
+    - raw_name: "State"
+      type: str
+      standard_name: donor--address--state
+
+    - raw_name: "ZipCode"
+      type: str
+      standard_name: donor--address--zipcode
+
+    - raw_name: "EntityDescription"
+      type: str
+
+    - raw_name: "Memo"
+      type: str
+      standard_name: description
+
+    - raw_name: "TransactionTypeId"
+      type: Int32
+      standard_name: transaction_type
+
+    - raw_name: "FirstName"
+      type: str
+      standard_name: donor--first_name
+
+    - raw_name: "LastName"
+      type: str
+      standard_name: donor--last_name
+
+    - raw_name: "FilerName"
+      type: str
+
+advanced_search_committees:
+  inherits: base
+  path_pattern: "^AdvancedSearch/Committee.*\\.csv$"
+  table_name: Transactor
+  column_details:
+    - raw_name: "CommitteeName"
+      type: str
+      standard_name: full_name
+
+    - raw_name: "PhoneNo"
+      type: str
+      standard_name: phone_number
+
+    - raw_name: "Email"
+      type: str
+      standard_name: email
+
+    - raw_name: "Status"
+      type: str
+
+    - raw_name: "LastAmendedDate"
+      type: str
+
+    - raw_name: "LastFiledDate"
+      type: str
+
+    - raw_name: "MasterCommitteeId"
+      type: Int64
+      # TODO: what is the difference between MasterCommitteeId and CommitteeID?
+
+    - raw_name: "CommitteeTypeName"
+      type: str
+      standard_name: transactor_type_specific
+
+    - raw_name: "RegistrationDate"
+      type: str
+
+    - raw_name: "CommitteeAddress"
+      type: str
+
+    - raw_name: "MailingAddress"
+      type: str
+      standard_name: address--full_address
+
+    - raw_name: "Chairman"
+      type: str
+      standard_name: chairman--member--full_name
+
+    - raw_name: "Treasurer"
+      type: str
+      standard_name: treasurer--member--full_name
+
+    - raw_name: "Candidate"
+      type: str
+      standard_name: candidate--member--full_name
+
+    - raw_name: "CandidatePhoneNo"
+      type: str
+      standard_name: candidate--member--phone_number
+
+    - raw_name: "CandidateEmail"
+      type: str
+      standard_name: candidate--member--email
+
+    - raw_name: "Designee"
+      type: str
+      standard_name: designee--member--full_name
+
+    - raw_name: "OfficeName"
+      type: str
+      standard_name: candidate--member--election_result--election--office_sought
+
+    - raw_name: "PartyName"
+      type: str
+      standard_name: party
+
+    - raw_name: "CountyName"
+      type: str
+      standard_name: address--county
+
+    - raw_name: "CommitteeID"
+      type: Int64
+      standard_name: id
+
+  enum_mapper:
+
+    party:
+      "Democratic": "Democrat"
+    transactor_type_specific:
+      "Candidate": "Candidate Committee"
+      "Candidate (participating in Clean Elections)": "Candidate Committee"
+      "Political Action Committee": "Committee"
+      "Political Action Committee (Mega)": "Committee"
+      "Political Action Committee (Mega Standing)": "Committee"
+      "Political Action Committee (Standing)": "Committee"
+      "Political Party": "Political Party"
+      "Political Party (Standing)": "Political Party"
+      "Office Holder Expenses": "Committee"
+
+    transactor_type:
+      "Candidate": "Organization"
+      "Candidate (participating in Clean Elections)": "Organization"
+      "Political Action Committee": "Organization"
+      "Political Action Committee (Mega)": "Organization"
+      "Political Action Committee (Mega Standing)": "Organization"
+      "Political Action Committee (Standing)": "Organization"
+      "Political Party": "Organization"
+      "Political Party (Standing)": "Organization"
+      "Office Holder Expenses": "Organization"
+
+    candidate--member--election_result--election--office_sought:
+      "Governor": Governor
+      "Secretary of State": Secretary of State
+      "Attorney General": Attorney General
+      "State Treasurer": State Treasurer
+      "Superintendent of Public Instruction": Misc. State
+      "State Mine Inspector": Misc. State
+      "Corporation Commissioner": Misc. State
+      "State Senator - District No. 1": State Senator
+      "State Senator - District No. 2": State Senator
+      "State Senator - District No. 3": State Senator
+      "State Senator - District No. 4": State Senator
+      "State Senator - District No. 5": State Senator
+      "State Senator - District No. 6": State Senator
+      "State Senator - District No. 7": State Senator
+      "State Senator - District No. 8": State Senator
+      "State Senator - District No. 9": State Senator
+      "State Senator - District No. 10": State Senator
+      "State Senator - District No. 11": State Senator
+      "State Senator - District No. 12": State Senator
+      "State Senator - District No. 13": State Senator
+      "State Senator - District No. 14": State Senator
+      "State Senator - District No. 15": State Senator
+      "State Senator - District No. 16": State Senator
+      "State Senator - District No. 17": State Senator
+      "State Senator - District No. 18": State Senator
+      "State Senator - District No. 19": State Senator
+      "State Senator - District No. 20": State Senator
+      "State Senator - District No. 21": State Senator
+      "State Senator - District No. 22": State Senator
+      "State Senator - District No. 23": State Senator
+      "State Senator - District No. 24": State Senator
+      "State Senator - District No. 25": State Senator
+      "State Senator - District No. 26": State Senator
+      "State Senator - District No. 27": State Senator
+      "State Senator - District No. 28": State Senator
+      "State Senator - District No. 29": State Senator
+      "State Senator - District No. 30": State Senator
+      "State Representative - District 1": State Representative
+      "State Representative - District 2": State Representative
+      "State Representative - District 3": State Representative
+      "State Representative - District 4": State Representative
+      "State Representative - District 5": State Representative
+      "State Representative - District 6": State Representative
+      "State Representative - District 7": State Representative
+      "State Representative - District 8": State Representative
+      "State Representative - District 9": State Representative
+      "State Representative - District 10": State Representative
+      "State Representative - District 11": State Representative
+      "State Representative - District 12": State Representative
+      "State Representative - District 13": State Representative
+      "State Representative - District 14": State Representative
+      "State Representative - District 15": State Representative
+      "State Representative - District 16": State Representative
+      "State Representative - District 17": State Representative
+      "State Representative - District 18": State Representative
+      "State Representative - District 19": State Representative
+      "State Representative - District 20": State Representative
+      "State Representative - District 21": State Representative
+      "State Representative - District 22": State Representative
+      "State Representative - District 23": State Representative
+      "State Representative - District 24": State Representative
+      "State Representative - District 25": State Representative
+      "State Representative - District 26": State Representative
+      "State Representative - District 27": State Representative
+      "State Representative - District 28": State Representative
+      "State Representative - District 29": State Representative
+      "State Representative - District 30": State Representative
+      "Justice of the Supreme Court": Supreme Court Justice
+      "Judge of the Court of Appeals": Judge
+
+    candidate--member--election_result--election--district:
+      "State Senator - District No. 1": 1
+      "State Senator - District No. 2": 2
+      "State Senator - District No. 3": 3
+      "State Senator - District No. 4": 4
+      "State Senator - District No. 5": 5
+      "State Senator - District No. 6": 6
+      "State Senator - District No. 7": 7
+      "State Senator - District No. 8": 8
+      "State Senator - District No. 9": 9
+      "State Senator - District No. 10": 10
+      "State Senator - District No. 11": 11
+      "State Senator - District No. 12": 12
+      "State Senator - District No. 13": 13
+      "State Senator - District No. 14": 14
+      "State Senator - District No. 15": 15
+      "State Senator - District No. 16": 16
+      "State Senator - District No. 17": 17
+      "State Senator - District No. 18": 18
+      "State Senator - District No. 19": 19
+      "State Senator - District No. 20": 20
+      "State Senator - District No. 21": 21
+      "State Senator - District No. 22": 22
+      "State Senator - District No. 23": 23
+      "State Senator - District No. 24": 24
+      "State Senator - District No. 25": 25
+      "State Senator - District No. 26": 26
+      "State Senator - District No. 27": 27
+      "State Senator - District No. 28": 28
+      "State Senator - District No. 29": 29
+      "State Senator - District No. 30": 30
+      "State Representative - District 1": 1
+      "State Representative - District 2": 2
+      "State Representative - District 3": 3
+      "State Representative - District 4": 4
+      "State Representative - District 5": 5
+      "State Representative - District 6": 6
+      "State Representative - District 7": 7
+      "State Representative - District 8": 8
+      "State Representative - District 9": 9
+      "State Representative - District 10": 10
+      "State Representative - District 11": 11
+      "State Representative - District 12": 12
+      "State Representative - District 13": 13
+      "State Representative - District 14": 14
+      "State Representative - District 15": 15
+      "State Representative - District 16": 16
+      "State Representative - District 17": 17
+      "State Representative - District 18": 18
+      "State Representative - District 19": 19
+      "State Representative - District 20": 20
+      "State Representative - District 21": 21
+      "State Representative - District 22": 22
+      "State Representative - District 23": 23
+      "State Representative - District 24": 24
+      "State Representative - District 25": 25
+      "State Representative - District 26": 26
+      "State Representative - District 27": 27
+      "State Representative - District 28": 28
+      "State Representative - District 29": 29
+      "State Representative - District 30": 30
+
+  duplicate_columns:
+    candidate--member--election_result--election--office_sought:
+      - candidate--member--election_result--election--district
+    transactor_type_specific:
+      - transactor_type
+
+mdb:
+  inherits: base
+  read_csv_params:
+    sep: ","
+    encoding: latin1
+    on_bad_lines: skip
+    header: 0
+  meta: true
+
+mdb_transactions:
+  inherits: mdb
+  table_name: Transaction
+  path_pattern: "^AccessDatabase/Transactions\\.csv$"
+  column_details:
+
+    - raw_name: "TransactionID"
+      type: Int64
+
+    - raw_name: "ModifiesTransactionID"
+      type: Int64
+      # TODO should we delete the modified transaction?
+
+    - raw_name: "TransactionTypeID"
+      type: Int32
+      standard_name: transaction_type
+      # TODO: should we switch the enum mapper in the other one to use transaction type id?
+
+    - raw_name: "CommitteeID"
+      type: Int64
+      standard_name: recipient_id
+      description: "ID of the committee receiving the transaction"
+
+    - raw_name: "TransactionDate"
+      type: str
+      standard_name: date
+      date_format: "%m/%d/%Y"
+      description: "Date of the transaction"
+
+    - raw_name: "Amount"
+      type: str
+      standard_name: amount
+      description: "Monetary amount of the transaction"
+      post_load_float: true
+
+    - raw_name: "NameID"
+      type: Int64
+      standard_name: donor_id
+      description: "ID of the non-filing party"
+
+    - raw_name: "IsForBenefit"
+      type: str
+      # TODO: 0 or -1 -- dig deeper into this
+
+    - raw_name: "SubjectCommitteeID"
+      type: Int64
+      # TODO: what is this?
+
+    - raw_name: "Memo"
+      type: str
+      standard_name: description
+      description: "Additional description or notes about the transaction"
+
+    - raw_name: "CategoryID"
+      type: Int32
+
+    - raw_name: "AccountType"
+      type: str
+
+    - raw_name: "Deleted"
+      type: str
+
+
+mdb_committees:
+  inherits: mdb 
+  table_name: Transactor
+  path_pattern: "^AccessDatabase/Committees\\.csv$"
+
+  column_details:
+    - raw_name: "CommitteeID"
+      type: Int64
+      standard_name: id
+
+    - raw_name: "NameID"
+      type: Int64
+
+    - raw_name: "ChairpersonNameID"
+      type: Int64
+      standard_name: chairman--member_id
+      description: "ID reference to the chairperson's name record"
+
+    - raw_name: "TreasurerNameID"
+      type: Int64
+      standard_name: treasurer--member_id
+      description: "ID reference to the treasurer's name record"
+
+    - raw_name: "CandidateNameID"
+      type: Int64
+      standard_name: candidate--member_id
+      description: "ID reference to the candidate's name record"
+
+    - raw_name: "DesigneeNameID"
+      type: Int64
+      standard_name: designee--member_id
+      description: "ID reference to the designee's name record"
+
+    - raw_name: "SponsorNameID"
+      type: Int64
+      standard_name: sponsor--member_id
+      description: "ID reference to the sponsor's name record"
+
+    - raw_name: "BallotMeasureID"
+      type: Int64
+      description: "ID reference to the associated ballot measure"
+      # TODO: what is this?
+
+    - raw_name: "PhysicalAddress1"
+      type: str
+      standard_name: address--line_1
+
+    - raw_name: "PhysicalAddress2"
+      type: str
+      standard_name: address--line_2
+
+    - raw_name: "PhysicalCity"
+      type: str
+      standard_name: address--city
+
+    - raw_name: "PhysicalState"
+      type: str
+      standard_name: address--state
+
+    - raw_name: "PhysicalZipCode"
+      type: str
+      standard_name: address--zipcode
+
+    - raw_name: "SponsorType"
+      type: str
+
+    - raw_name: "SponsorRelationship"
+      type: str
+
+    - raw_name: "OrganizationDate"
+      type: str
+
+    - raw_name: "TerminationDate"
+      type: str
+
+    - raw_name: "BenefitsBallotMeasure"
+      type: str
+
+    - raw_name: "FinancialInstitution1"
+      type: str
+
+    - raw_name: "FinancialInstitution2"
+      type: str
+
+    - raw_name: "FinancialInstitution3"
+      type: str
+
+    - raw_name: "CandidatePartyID"
+      type: Int32
+      standard_name: candidate--member--party
+
+    - raw_name: "CandidateOfficeID"
+      type: Int32
+      standard_name: candidate--member--election_result--election--office_sought
+
+    - raw_name: "CandidateCountyID"
+      type: Int32
+      standard_name: candidate--member--address--county
+
+    - raw_name: "CandidateIsIncumbent"
+      type: str
+
+    - raw_name: "CandidateCycleID"
+      type: Int32
+
+    - raw_name: "CandidateOtherPartyName"
+      type: str
+
+  duplicate_columns:
+    candidate--member--election_result--election--office_sought: 
+    - candidate--member--election_result--election--district
+
+  enum_mapper:
+    candidate--member--address--county:
+      "1": "Apache"
+      "2": "Cochise"
+      "3": "Coconino"
+      "4": "Gila"
+      "5": "Graham"
+      "6": "Greenlee"
+      "7": "La Paz"
+      "8": "Maricopa"
+      "9": "Mohave"
+      "10": "Navajo"
+      "11": "Pima"
+      "12": "Pinal"
+      "13": "Santa Cruz"
+      "14": "Yavapai"
+      "15": "Yuma"
+
+    candidate--member--party:
+      "8": "Other"  # Americans Elect
+      "10": "Democrat"  # Democratic
+      "15": "Green"  # Green
+      "20": "Libertarian"  # Libertarian
+      "30": "Republican"  # Republican
+      "1000": "Other"  # Other
+      "1001": "Other"  # N/A
+      "1002": "Independent"  # NonPartisian
+    
+    candidate--member--election_result--election--office_sought:
+      # OfficeID: OfficeName -> standard_name (from table.yaml office_sought enum)
+      "1": "Misc. City"  # Other
+      "2000": "Governor"  # Governor
+      "2010": "Secretary of State"  # Secretary of State
+      "2020": "Attorney General"  # Attorney General
+      "2030": "State Treasurer"  # State Treasurer
+      "2040": "Misc. State"  # Superintendent of Public Instruction
+      "2050": "Misc. State"  # State Mine Inspector
+      "2060": "Misc. State"  # Corporation Commissioner
+      "3101": "State Senator"  # State Senator - District No. 1
+      "3102": "State Senator"  # State Senator - District No. 2
+      "3103": "State Senator"  # State Senator - District No. 3
+      "3104": "State Senator"  # State Senator - District No. 4
+      "3105": "State Senator"  # State Senator - District No. 5
+      "3106": "State Senator"  # State Senator - District No. 6
+      "3107": "State Senator"  # State Senator - District No. 7
+      "3108": "State Senator"  # State Senator - District No. 8
+      "3109": "State Senator"  # State Senator - District No. 9
+      "3110": "State Senator"  # State Senator - District No. 10
+      "3111": "State Senator"  # State Senator - District No. 11
+      "3112": "State Senator"  # State Senator - District No. 12
+      "3113": "State Senator"  # State Senator - District No. 13
+      "3114": "State Senator"  # State Senator - District No. 14
+      "3115": "State Senator"  # State Senator - District No. 15
+      "3116": "State Senator"  # State Senator - District No. 16
+      "3117": "State Senator"  # State Senator - District No. 17
+      "3118": "State Senator"  # State Senator - District No. 18
+      "3119": "State Senator"  # State Senator - District No. 19
+      "3120": "State Senator"  # State Senator - District No. 20
+      "3121": "State Senator"  # State Senator - District No. 21
+      "3122": "State Senator"  # State Senator - District No. 22
+      "3123": "State Senator"  # State Senator - District No. 23
+      "3124": "State Senator"  # State Senator - District No. 24
+      "3125": "State Senator"  # State Senator - District No. 25
+      "3126": "State Senator"  # State Senator - District No. 26
+      "3127": "State Senator"  # State Senator - District No. 27
+      "3128": "State Senator"  # State Senator - District No. 28
+      "3129": "State Senator"  # State Senator - District No. 29
+      "3130": "State Senator"  # State Senator - District No. 30
+      "3201": "State Representative"  # State Representative - District 1
+      "3202": "State Representative"  # State Representative - District 2
+      "3203": "State Representative"  # State Representative - District 3
+      "3204": "State Representative"  # State Representative - District 4
+      "3205": "State Representative"  # State Representative - District 5
+      "3206": "State Representative"  # State Representative - District 6
+      "3207": "State Representative"  # State Representative - District 7
+      "3208": "State Representative"  # State Representative - District 8
+      "3209": "State Representative"  # State Representative - District 9
+      "3210": "State Representative"  # State Representative - District 10
+      "3211": "State Representative"  # State Representative - District 11
+      "3212": "State Representative"  # State Representative - District 12
+      "3213": "State Representative"  # State Representative - District 13
+      "3214": "State Representative"  # State Representative - District 14
+      "3215": "State Representative"  # State Representative - District 15
+      "3216": "State Representative"  # State Representative - District 16
+      "3217": "State Representative"  # State Representative - District 17
+      "3218": "State Representative"  # State Representative - District 18
+      "3219": "State Representative"  # State Representative - District 19
+      "3220": "State Representative"  # State Representative - District 20
+      "3221": "State Representative"  # State Representative - District 21
+      "3222": "State Representative"  # State Representative - District 22
+      "3223": "State Representative"  # State Representative - District 23
+      "3224": "State Representative"  # State Representative - District 24
+      "3225": "State Representative"  # State Representative - District 25
+      "3226": "State Representative"  # State Representative - District 26
+      "3227": "State Representative"  # State Representative - District 27
+      "3228": "State Representative"  # State Representative - District 28
+      "3229": "State Representative"  # State Representative - District 29
+      "3230": "State Representative"  # State Representative - District 30
+      "4000": "Supreme Court Justice"  # Justice of the Supreme Court
+      "4010": "Judge"  # Judge of the Court of Appeals
+
+    candidate--member--election_result--election--district:
+      "3101": 1
+      "3102": 2
+      "3103": 3
+      "3104": 4
+      "3105": 5
+      "3106": 6
+      "3107": 7
+      "3108": 8
+      "3109": 9
+      "3110": 10
+      "3111": 11
+      "3112": 12
+      "3113": 13
+      "3114": 14
+      "3115": 15
+      "3116": 16
+      "3117": 17
+      "3118": 18
+      "3119": 19
+      "3120": 20
+      "3121": 21
+      "3122": 22
+      "3123": 23
+      "3124": 24
+      "3125": 25
+      "3126": 26
+      "3127": 27
+      "3128": 28
+      "3129": 29
+      "3130": 30
+      "3201": 1
+      "3202": 2
+      "3203": 3
+      "3204": 4
+      "3205": 5
+      "3206": 6
+      "3207": 7
+      "3208": 8
+      "3209": 9
+      "3210": 10
+      "3211": 11
+      "3212": 12
+      "3213": 13
+      "3214": 14
+      "3215": 15
+      "3216": 16
+      "3217": 17
+      "3218": 18
+      "3219": 19
+      "3220": 20
+      "3221": 21
+      "3222": 22
+      "3223": 23
+      "3224": 24
+      "3225": 25
+      "3226": 26
+      "3227": 27
+      "3228": 28
+      "3229": 29
+      "3230": 30
+
+mdb_names:
+  inherits: mdb
+  table_name: Transactor
+  path_pattern: "^AccessDatabase/Names\\.csv$"
+
+  duplicate_columns:
+    transactor_type_specific:
+      - transactor_type
+
+  column_details:
+    - raw_name: "NameID"
+      type: Int64
+      standard_name: id
+      description: "Unique identifier for the name record"
+
+    - raw_name: "NameGroupID"
+      type: Int64
+
+    - raw_name: "EntityTypeID"
+      type: Int32
+      standard_name: transactor_type_specific
+
+    - raw_name: "LastName"
+      type: str
+      standard_name: last_name
+
+    - raw_name: "FirstName"
+      type: str
+      standard_name: first_name
+
+    - raw_name: "MiddleName"
+      type: str
+      standard_name: middle_name
+
+    - raw_name: "Suffix"
+      type: str
+      standard_name: name_suffix
+
+    - raw_name: "Address1"
+      type: str
+      standard_name: address--line_1
+
+    - raw_name: "Address2"
+      type: str
+      standard_name: address--line_2
+
+    - raw_name: "City"
+      type: str
+      standard_name: address--city
+
+    - raw_name: "State"
+      type: str
+      standard_name: address--state
+
+    - raw_name: "ZipCode"
+      type: str
+      standard_name: address--zipcode
+
+    - raw_name: "CountyID"
+      type: Int32
+      standard_name: address--county
+
+    - raw_name: "Occupation"
+      type: str
+      standard_name: employer--role
+
+    - raw_name: "Employer"
+      type: str
+      standard_name: employer--organization--full_name

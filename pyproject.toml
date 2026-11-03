@@ -7,8 +7,14 @@ requires-python = ">=3.10"
 name = "climate-cabinet-campaign-finance"
 dynamic = ["version"]
 
+[project.scripts]
+cft = "utils.cli.core:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]  # the package is in src/toto/ now
+
+[tool.setuptools.package-data]
+utils = ["*.yaml", "**/*.yaml"]
 
 [tool.ruff.lint]
 extend-select = [
@@ -38,14 +44,15 @@ ignore = [
   "ANN003", # missing type on **kwargs
   "ANN101", # deprecated rule
   "ANN102", # deprecated rule
-  "B905"    # won't work on python <3.10
+  "B905",   # won't work on python <3.10
+  "S608"    # not worried about sql injection for local database
 ]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 
 [tool.ruff.lint.per-file-ignores]
-"**/tests/*" = ["S101", "D", "ANN"]
+"**/tests/*" = ["S101", "D", "ANN", "PLR2004"]
 
 [tool.pytest.ini_options]
 testpaths = "tests"

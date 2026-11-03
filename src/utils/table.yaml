@@ -2,11 +2,12 @@ Transactor:
 # whether to make Transactor a 'parent' table that Individual and Organization
 # inherit from was a difficult design decision.
 # sources: https://stackoverflow.com/a/695860
-  child_types:
+  child_tables:
     - Individual
     - Organization
   required_attributes:
-    - transactor_type # Indivudual or Organization
+    - id
+    # - transactor_type # Indivudual or Organization
 
   attributes:
     - id
@@ -14,6 +15,9 @@ Transactor:
     - transactor_type_specific
     - transactor_type # Indivudual or Organization
     - phone_number
+    - email
+    - party
+    - reported_state
   enum_columns:
     transactor_type:
       - Individual
@@ -26,40 +30,95 @@ Transactor:
       - Non-profit
       - Committee
       - Party
-  multivalued_columns:
-    address: Address
+      - Caucus
+    party:
+      - Republican
+      - Democrat
+      - Independent
+      - Other
+      - Green
+      - Libertarian
+      - Constitution
+      - Reform  
+  relations:
+    - prefix: address
+      table: Address
+      direction: reverse
+      reverse_relation_name: transactor_id
+    
 
 Individual:
-  parent_type: Transactor
+  parent_table: Transactor
   attributes:
     - first_name
     - middle_name
     - last_name
     - name_suffix
-    - name_title
+    - name_prefix
     - name_preferred
     - occupation
-    - party
-  multivalued_columns:
-    employer: Membership
-    election_result: ElectionResult
+  relations:
+    - prefix: employer
+      table: Membership
+      direction: reverse
+      reverse_relation_name: member_id
+      relationship_column_values:
+        membership_type: Employee
+    - prefix: election_result
+      table: ElectionResult
+      direction: reverse
+      reverse_relation_name: candidate_id
 
 Organization:
-  parent_type: Transactor
+  parent_table: Transactor
   attributes:
     - naics
     - sic
     - stock_symbol
+    - ein
   # forward_relations:
   #   parent_org: Organization
+  relations:
+    - prefix: candidate
+      table: Membership
+      direction: reverse
+      reverse_relation_name: organization_id
+      relationship_column_values:
+        membership_type: Candidate
+    - prefix: treasurer
+      table: Membership
+      direction: reverse
+      reverse_relation_name: organization_id
+      relationship_column_values:
+        membership_type: Treasurer
+    - prefix: chairman
+      table: Membership
+      direction: reverse
+      reverse_relation_name: organization_id
+      relationship_column_values:
+        membership_type: Chairman
+    - prefix: sponsor
+      table: Membership
+      direction: reverse
+      reverse_relation_name: organization_id
+      relationship_column_values:
+        membership_type: Sponsor
+    - prefix: designee
+      table: Membership
+      direction: reverse
+      reverse_relation_name: organization_id
+      relationship_column_values:
+        membership_type: Designee
+
 
 Transaction:
   required_attributes:
     - amount
     - donor_id
     - recipient_id
+    # - year
+    # - state
   attributes:
-    - id
     - amount
     - date
     - year
@@ -67,63 +126,103 @@ Transaction:
     - day
     - transaction_type
     - description
-    - reported_election_id
+    - reported_election_year
     - donor_id
     - recipient_id
-  forward_relations:
-    donor: Transactor
-    recipient: Transactor
-    reported_election: Election
-  repeating_columns:
-    - date
-    - amount
-    - transaction_type
-    - year
-    - month
-    - day
-    - description
+    - reported_state
+    - affected_party_id
+    - influence_type
+  relations:
+    - prefix: donor
+      table: Transactor
+      direction: forward
+    - prefix: recipient
+      table: Transactor
+      direction: forward
+    - prefix: affected_party
+      table: Transactor
+      direction: forward
   enum_columns:
     transaction_type:
       - contribution
-  # TODO: what other types are there
+      - expenditure
+      - independent_expenditure
+    influence_type:
+      - positive
+      - negative
+      - neutral
+  types:
+    amount: Float32
+    date: datetime64[ns]
+    reported_election_year: Int32
+    year: Int32
+    day: Int32
 
 Election:
   required_attributes:
-    - year
-    - district
     - office_sought
-    - state
   attributes:
     - id
     - year
     - district
     - office_sought
     - state
+    - reported_state
+  enum_columns:
+    office_sought:
+      - Governor
+      - Lieutenant Governor
+      - Secretary of State
+      - Attorney General
+      - Auditor General
+      - State Treasurer
+      - State Representative
+      - State Senator
+      - Supreme Court Justice
+      - Judge
+      - Mayor
+      - District Attorney
+      - Misc. City
+      - Misc. State
+      - City Council
+  types:
+    year: Int32
 
 ElectionResult:
   required_attributes:
     - candidate_id
     - election_id
   attributes:
-    - votes_recieved
+    - id
+    - votes_received
     - win
     - candidate_id
     - election_id
-  forward_relations:
-    candidate: Individual
-    election: Election
+    - reported_state
+  relations:
+    - prefix: candidate
+      table: Individual
+      direction: forward
+    - prefix: election
+      table: Election
+      direction: forward
+  types:
+    votes_received: Int32
+    win: bool
     
 Address:
   required_attributes:
     - transactor_id
   attributes:
+    - recipient
     - full_address 
     - line_1
     - building_number
     - building_name
     - street_predirectional
+    - street_pre_type # i.e. highway, county road, etc.
     - street_name
-    - street_suffix # i.e Ave., St., Rd., ...
+    - street_post_type # i.e Ave., St., Rd., ...
     - street_postdirectional
     - po_box
     - line_2
@@ -138,8 +237,11 @@ Address:
     - latest_known_date
     - known_later_address
     - transactor_id
-  forward_relations:
-    transactor: Transactor
+    - reported_state
+  relations:
+    - prefix: transactor
+      table: Transactor
+      direction: forward
 
 Membership:
   required_attributes:
@@ -154,17 +256,21 @@ Membership:
     - known_later_employer # for memberhship type employee
     - member_id
     - organization_id
-  forward_relations:
-    member: Individual
-    organization: Organization
-
-IdMap:
-  required_attribute:
-    - original_id
-    - uuid
-  attributes:
-    - year
-    - state
-    - original_id
-    - uuid
-    - table
+    - reported_state
+  relations:
+    - prefix: member
+      table: Individual
+      direction: forward
+    - prefix: organization
+      table: Organization
+      direction: forward
+  enum_columns:
+    membership_type:
+      - Employee
+      - Member
+      - Treasurer
+      - Chairman
+      - Candidate
+      - Designee
+      - Sponsor
+      - Other

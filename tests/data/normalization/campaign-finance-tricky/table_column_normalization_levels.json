@@ -1,0 +1,39 @@
+{
+    "unnormalized": {
+        "Transaction": {
+            "0": [
+                "amount-1",
+                "amount",
+                "date-1",
+                "date"
+            ],
+            "1": [
+                "donor",
+                "recipient"
+            ],
+            "3": [
+                "recipient_id",
+                "donor_id",
+                "reported_state",
+                "transaction_type",
+                "amount",
+                "date",
+                "transaction_type"
+            ]
+        }
+    },
+    "1NF": {
+        "Transaction": {
+            "0": [],
+            "1": ["donor", "recipient"],
+            "3": [
+                "recipient_id",
+                "donor_id",
+                "amount",
+                "transaction_type",
+                "date",
+                "reported_state"
+            ]
+        }
+    }
+}

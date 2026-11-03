@@ -1,0 +1,4 @@
+amount,donor_id,recipient_id,date,transaction_type,reported_state
+25,1000,1001,2025-02-12,contribution,PA
+32,1000,1001,2024-11-21,contribution,PA
+12,1000,1002,2019-02-21,expense,PA

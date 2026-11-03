@@ -1,155 +1,22 @@
 """Constants to be used in various parts of the project."""
 
+import os
 from pathlib import Path
 
-import splink.duckdb.comparison_library as cl
-import splink.duckdb.comparison_template_library as ctl
+import dotenv
 
+dotenv.load_dotenv()
+# repository root; only meaningful when running from a source checkout
 BASE_FILEPATH = Path(__file__).resolve().parent.parent.parent
+# installed utils package; use for resources bundled as package data
+PACKAGE_DIR = Path(__file__).resolve().parent
+DATA_DIR = Path(os.getenv("DATA_DIR", BASE_FILEPATH / "data")).resolve()
+RAW_DATA_DIRECTORY = DATA_DIR / "raw"
+STATE_FINANCE_CONFIG_DIRECTORY = PACKAGE_DIR / "standardize" / "finance" / "config"
 # returns the base_path to the directory
 
-source_metadata_directory = BASE_FILEPATH / "src" / "utils" / "static"
+source_metadata_directory = PACKAGE_DIR / "static"
 
-COMPANY_TYPES = {
-    "CORP": "CORPORATION",
-    "CO": "CORPORATION",
-    "LLC": "LIMITED LIABILITY COMPANY",
-    "PTNR": "PARTNERSHIP",
-    "LP": "LIMITED PARTNERSHIP",
-    "LLP": "LIMITED LIABILITY PARTNERSHIP",
-    "SOLE PROP": "SOLE PROPRIETORSHIP",
-    "SP": "SOLE PROPRIETORSHIP",
-    "NPO": "NONPROFIT ORGANIZATION",
-    "PC": "PROFESSIONAL CORPORATION",
-    "CO-OP": "COOPERATIVE",
-    "LTD": "LIMITED COMPANY",
-    "JSC": "JOINT STOCK COMPANY",
-    "HOLDCO": "HOLDING COMPANY",
-    "PLC": "PUBLIC LIMITED COMPANY",
-    "PVT LTD": "PRIVATE LIMITED COMPANY",
-    "INC": "INCORPORATED",
-    "ASSOC": "ASSOCIATION",
-    "FDN": "FOUNDATION",
-    "TR": "TRUST",
-    "SOC": "SOCIETY",
-    "CONSORT": "CONSORTIUM",
-    "SYND": "SYNDICATE",
-    "GRP": "GROUP",
-    "CORP SOLE": "CORPORATION SOLE",
-    "JV": "JOINT VENTURE",
-    "SUB": "SUBSIDIARY",
-    "FRANCHISE": "FRANCHISE",
-    "PA": "PROFESSIONAL ASSOCIATION",
-    "CIC": "COMMUNITY INTEREST COMPANY",
-    "PAC": "POLITICAL ACTION COMMITTEE",
-}
-
-individuals_settings = {
-    "link_type": "dedupe_only",
-    "blocking_rules_to_generate_predictions": [
-        "l.first_name = r.first_name",
-        "l.last_name = r.last_name",
-    ],
-    "comparisons": [
-        ctl.name_comparison("full_name"),
-        cl.exact_match("entity_type", term_frequency_adjustments=True),
-        cl.jaro_winkler_at_thresholds(
-            "state", [0.9, 0.8]
-        ),  # threshold will catch typos and shortenings
-        cl.jaro_winkler_at_thresholds("party", [0.9, 0.8]),
-        cl.jaro_winkler_at_thresholds("company", [0.9, 0.8]),
-    ],
-    # DEFAULT
-    "retain_matching_columns": True,
-    "retain_intermediate_calculation_columns": True,
-    "max_iterations": 10,
-    "em_convergence": 0.01,
-}
-
-individuals_blocking = [
-    "l.first_name = r.first_name",
-    "l.last_name = r.last_name",
-]
-
-organizations_settings = {
-    "link_type": "dedupe_only",
-    "blocking_rules_to_generate_predictions": [
-        "l.name = r.name",
-    ],
-    "comparisons": [
-        cl.exact_match("entity_type", term_frequency_adjustments=True),
-        cl.jaro_winkler_at_thresholds(
-            "state", [0.9, 0.8]
-        ),  # threshold will catch typos and shortenings
-        # Add more comparisons as needed
-    ],
-    "retain_matching_columns": True,
-    "retain_intermediate_calculation_columns": True,
-    "max_iterations": 10,
-    "em_convergence": 0.01,
-}
-
-organizations_blocking = ["l.name = r.name"]
-
-# individuals compnay f names
-f_companies = [
-    "exxon",
-    "chevron",
-    "southwest gas",
-    "petroleum",
-    "koch industries",
-    "koch companies",
-    "oil & gas",
-    "marathon oil",
-    "shell oil",
-]
-
-# organizations f names
-f_org_names = [
-    "koch industries",
-    "koch pac",
-    "kochpac",
-    "southwest gas az",
-    "pinnacle west",
-    "americans for prosperity",
-    "energy transfer",
-]
-
-# organizations c names
-c_org_names = [
-    "clean energy",
-    "vote solar action",
-    "renewable",
-    "pattern energy",
-    "beyond carbon",
-    "lcv victory",
-    "league of conservation",
-]
-
-suffixes = [
-    "sr",
-    "jr",
-    "i",
-    "ii",
-    "iii",
-    "iv",
-    "v",
-    "vi",
-    "vii",
-    "viii",
-    "ix",
-    "x",
-]
-
-titles = [
-    "mr",
-    "ms",
-    "mrs",
-    "miss",
-    "prof",
-    "dr",
-    "doctor",
-    "sir",
-    "madam",
-    "professor",
-]
+SPLIT = "--"
+ID_SUFFIX = "_id"
+DEFAULT_SCHEMA_PATH = PACKAGE_DIR / "table.yaml"

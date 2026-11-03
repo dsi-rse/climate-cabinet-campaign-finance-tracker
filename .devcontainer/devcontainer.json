@@ -1,5 +1,5 @@
 {
-	"name": "2024-winter-clinic-climate-cabinet-devcontainer",
+	"name": "campaign-finance-tracker-devcontainer",
 	"build": {
 		"dockerfile": "../Dockerfile",
 		"context": "..",

@@ -1,0 +1,427 @@
+base:
+  meta: True
+  state_code: pa
+  read_csv_params:
+    sep: ","
+    encoding: latin-1
+    on_bad_lines: warn
+    header: 0
+  state_code_columns:
+    - reported_state
+  year_filter_filepath_regex: ".*\\/(\\d{4})\\/[^\\/]+$"
+  null_values:
+    amount: 
+      - 0.0
+    amount-1: 
+      - 0.0
+    amount-2: 
+      - 0.0
+    amount-3: 
+      - 0.0
+    date:
+      - 0
+    date-1:
+      - 0
+    date-2:
+      - 0
+    date-3:
+      - 0
+
+
+contributions:
+  inherits: base
+  table_name: Transaction
+  column_details:
+    - raw_name: CampaignFinanceID
+      type: str
+
+    - raw_name: FILERID
+      type: str
+      standard_name: recipient_id
+
+    - raw_name: EYEAR
+      type: Int16
+      standard_name: reported_election_year
+
+    - raw_name: SubmittedDate
+      type: str
+
+    - raw_name: CYCLE
+      type: str
+
+    - raw_name: Section
+      type: str
+
+    - raw_name: CONTRIBUTOR
+      type: str
+      standard_name: donor--full_name
+
+    - raw_name: ADDRESS1
+      type: str
+      standard_name: donor--address--line_1
+
+    - raw_name: ADDRESS2
+      type: str
+      standard_name: donor--address--line_2
+
+    - raw_name: CITY
+      type: str
+      standard_name: donor--address--city
+
+    - raw_name: STATE
+      type: str
+      standard_name: donor--address--state
+
+    - raw_name: ZIPCODE
+      type: str
+      standard_name: donor--address--zipcode
+
+    - raw_name: OCCUPATION
+      type: str
+      standard_name: donor--employer--role
+
+    - raw_name: ENAME
+      type: str
+      standard_name: donor--employer--organization--full_name
+
+    - raw_name: EADDRESS1
+      type: str
+      standard_name: donor--employer--organization--address--line_1
+
+    - raw_name: EADDRESS2
+      type: str
+      standard_name: donor--employer--organization--address--line_2
+
+    - raw_name: ECITY
+      type: str
+      standard_name: donor--employer--organization--address--city
+
+    - raw_name: ESTATE
+      type: str
+      standard_name: donor--employer--organization--address--state
+
+    - raw_name: EZIPCODE
+      type: str
+      standard_name: donor--employer--organization--address--zipcode
+
+    - raw_name: CONTDATE1
+      type: Int32
+      date_format: "%Y%m%d"
+      standard_name: date-1
+
+    - raw_name: CONTAMT1
+      type: Float32
+      standard_name: amount-1
+
+    - raw_name: CONTDATE2
+      type: Int32
+      date_format: "%Y%m%d"
+      standard_name: date-2
+
+    - raw_name: CONTAMT2
+      type: Float32
+      standard_name: amount-2
+
+    - raw_name: CONTDATE3
+      type: Int32
+      date_format: "%Y%m%d"
+      standard_name: date-3
+
+    - raw_name: CONTAMT3
+      type: Float32
+      standard_name: amount-3
+
+    - raw_name: CONTDESC
+      type: str
+      standard_name: description
+  
+  path_pattern: "(?i)^((?!2002)\\d{4})/contrib.*\\.txt$"
+
+
+contributions_2002:
+  inherits: contributions
+  path_pattern: "(?i)^2002/contrib.*\\.txt$"
+  # 2002 files use the legacy layout with no header row
+  read_csv_params:
+    sep: ","
+    encoding: latin-1
+    on_bad_lines: warn
+    header: null
+  column_order:
+    - FILERID
+    - EYEAR
+    - CYCLE
+    - SECTION
+    - CONTRIBUTOR
+    - ADDRESS1
+    - ADDRESS2
+    - CITY
+    - STATE
+    - ZIPCODE
+    - OCCUPATION
+    - ENAME
+    - EADDRESS1
+    - EADDRESS2
+    - ECITY
+    - ESTATE
+    - EZIPCODE
+    - CONTDATE1
+    - CONTAMT1
+    - CONTDATE2
+    - CONTAMT2
+    - CONTDATE3
+    - CONTAMT3
+    - CONTDESC
+
+
+filer:
+  inherits: base
+  table_name: Transactor
+  path_pattern: "(?i)^((?!2002)\\d{4})/filer.*\\.txt$"
+
+  enum_mapper:
+    # source: https://www.pa.gov/agencies/dos/resources/voting-and-elections-resources/campaign-finance-resources/technical-specifications-for-electronic-filing-of-campaign-expen.html#accordion-6a5fc1b7ea-item-8245f60064
+    election_result--election--office_sought:
+      STH: State Representative
+      STS: State Senator
+      GOV: Governor
+      LTG: Lieutenant Governor
+      ATT: Attorney General
+      AUD: Auditor General
+      TRE: State Treasurer
+      SPM: Supreme Court Justice
+      SPR: Judge # superior
+      CCJ: Judge # commonwealth
+      CPJ: Judge # common pleas
+      CPJA: Judge # unlisted
+      MCJ: Judge # municipal
+      TCJ: Judge # traffic
+      PH1: Mayor # philly
+      PH2: District Attorney # philly
+      PH3: Misc. City # City Controller, philly
+      PH4: City Council # philly
+      PH5: Misc. City # commissioner, philly
+      PH6: Misc. City # register of wills, philly
+      PH7: Misc. City # clerk of quarter sessions, philly
+
+    transactor_type:
+      "1": Individual
+      "2": Organization
+
+    transactor_type_specific:
+      "1": Candidate
+      "2": Committee
+      "3": Unknown # lobbyist, could be pac or ind
+
+    party:
+      DEM: Democrat
+      REP: Republican
+      CST: Constitution
+      LIB: Libertarian
+      REF: Reform
+      OTH: Other
+
+  column_details:
+    - raw_name: CampaignFinanceID
+      type: str
+
+    - raw_name: FILERID
+      type: str
+      standard_name: id
+
+    - raw_name: EYEAR
+      type: Int16
+      standard_name: election_result--election--year
+
+    - raw_name: SubmittedDate
+      type: str
+
+    - raw_name: CYCLE
+      type: Int8
+
+    - raw_name: AMMEND
+      type: str
+      notes: bool
+
+    - raw_name: TERMINATE
+      type: str
+      notes: bool
+
+    - raw_name: FILERTYPE
+      type: str
+      standard_name: transactor_type
+      enum: transactor_type
+      notes: "TODO: enum?"
+
+    - raw_name: FILERNAME
+      type: str
+      standard_name: full_name
+
+    - raw_name: OFFICE
+      type: str
+      standard_name: election_result--election--office_sought
+      enum: office_sought
+
+    - raw_name: DISTRICT
+      type: str
+      standard_name: election_result--election--district
+
+    - raw_name: PARTY
+      type: str
+      standard_name: party
+
+    - raw_name: ADDRESS1
+      type: str
+      standard_name: address--line_1
+
+    - raw_name: ADDRESS2
+      type: str
+      standard_name: address--line_2
+
+    - raw_name: CITY
+      type: str
+      standard_name: address--city
+
+    - raw_name: STATE
+      type: str
+      standard_name: address--state
+
+    - raw_name: ZIPCODE
+      type: str
+      standard_name: address--zipcode
+
+    - raw_name: COUNTY
+      type: str
+      standard_name: address--county
+
+    - raw_name: PHONE
+      type: str
+      standard_name: phone_number
+
+    - raw_name: BEGINNING
+      type: Float32
+
+    - raw_name: MONETARY
+      type: Float32
+
+    - raw_name: INKIND
+      type: Float32
+  duplicate_columns:
+    reported_state: 
+      - election_result--election--state
+    transactor_type:
+      - transactor_type_specific
+
+filer_2002:
+  inherits: filer
+  path_pattern: "(?i)^2002/filer.*\\.txt$"
+  # 2002 files use the legacy layout with no header row
+  read_csv_params:
+    sep: ","
+    encoding: latin-1
+    on_bad_lines: warn
+    header: null
+  column_order:
+    - FILERID
+    - EYEAR
+    - CYCLE
+    - AMMEND
+    - TERMINATE
+    - FILERTYPE
+    - FILERNAME
+    - OFFICE
+    - DISTRICT
+    - PARTY
+    - ADDRESS1
+    - ADDRESS2
+    - CITY
+    - STATE
+    - ZIPCODE
+    - COUNTY
+    - PHONE
+    - BEGINNING
+    - MONETARY
+    - INKIND
+
+
+expense:
+  inherits: base
+  table_name: Transaction
+  path_pattern: "(?i)^((?!2002)\\d{4})/expense.*\\.txt$"
+  column_details:
+    - raw_name: CampaignFinanceID
+      type: str
+
+    - raw_name: FILERID
+      type: str
+      standard_name: donor_id
+
+    - raw_name: EYEAR
+      type: Int16
+      standard_name: reported_election_year
+
+    - raw_name: SubmittedDate
+      type: str
+
+    - raw_name: CYCLE
+      type: Int16
+
+    - raw_name: EXPNAME
+      type: str
+      standard_name: recipient--full_name
+
+    - raw_name: ADDRESS1
+      type: str
+      standard_name: recipient--address--line_1
+
+    - raw_name: ADDRESS2
+      type: str
+      standard_name: recipient--address--line_2
+
+    - raw_name: CITY
+      type: str
+      standard_name: recipient--address--city
+
+    - raw_name: STATE
+      type: str
+      standard_name: recipient--address--state
+
+    - raw_name: ZIPCODE
+      type: str
+      standard_name: recipient--address--zipcode
+
+    - raw_name: EXPDATE
+      type: str
+      date_format: "%Y%m%d"
+      standard_name: date
+
+    - raw_name: EXPAMT
+      type: Float32
+      standard_name: amount
+
+    - raw_name: EXPDESC
+      type: str
+      standard_name: description
+
+expense_2002:
+  inherits: expense
+  path_pattern: "(?i)^2002/expense.*\\.txt$"
+  # 2002 files use the legacy layout with no header row
+  read_csv_params:
+    sep: ","
+    encoding: latin-1
+    on_bad_lines: warn
+    header: null
+  column_order:
+    - FILERID
+    - EYEAR
+    - CYCLE
+    - EXPNAME
+    - ADDRESS1
+    - ADDRESS2
+    - CITY
+    - STATE
+    - ZIPCODE
+    - EXPDATE
+    - EXPAMT
+    - EXPDESC

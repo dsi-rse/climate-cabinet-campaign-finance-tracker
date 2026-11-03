@@ -1,0 +1,5 @@
+amount-1,amount-2,amount,donor_id,donor--full_name,donor--address--city,donor--address--state,donor--employer--organization--full_name,donor--employer--organization--address--city,recipient--full_name,recipient_id,transaction_type-1,transaction_type-2,date-1,date-2,date,transaction_type,reported_state
+100,150,,,John Doe,Chicago,IL,University of Chicago,Chicago,,bc152604-0e5b-4613-b858-d51afc259846,contribution,contribution,2024-01-23,2024-01-26,,,IL
+200,250,,,Jane Smith,New York,NY,NYU,New York,,d7ed5203-810c-498a-824d-605f8bd22238,contribution,contribution,2024-02-10,2024-02-18,,,NY
+,,102,bc152604-0e5b-4613-b858-d51afc259846,,,,,,Person 3,,,,,,2024-03-01,contribution,TX
+,,111,d7ed5203-810c-498a-824d-605f8bd22238,,,,,,Person 4,,,,,,2024-03-14,contribution,PA

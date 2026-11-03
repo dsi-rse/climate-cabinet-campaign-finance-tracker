@@ -1,0 +1,948 @@
+# Docs: https://www.ethics.state.tx.us/data/search/cf/CampaignFinanceCSVFileFormat.pdf
+base:
+  meta: True
+  state_code: tx
+  read_csv_params:
+    sep: ","
+    encoding: utf-8
+    on_bad_lines: skip
+    header: 0
+  state_code_columns:
+    - reported_state
+
+contributions:
+  path_pattern: ^contribs_\d{2}\.csv$
+  duplicate_columns:
+    recipient--transactor_type:
+      - recipient--transactor_type_specific
+  enum_mapper:
+    donor--transactor_type:
+      INDIVIDUAL: Individual
+      ENTITY: Organization
+
+
+    recipient--transactor_type_specific:
+      # https://www.ethics.state.tx.us/data/search/cf/TX_ERF13_7.pdf
+      MPAC: Committee # Monthly Filing Gen Purp Comm
+      COH: Individual # Candidate/Office Holder
+      PTYCORP: Party # Political Party Report of Corporate/Labor Contributions
+      JCOH: Individual # Judicial Candidate/Office Holder
+      SPAC: Committee # Specific Purpose Committee
+      GPAC: Committee # General Purpose Committee
+
+    recipient--transactor_type:
+      MPAC: Organization
+      COH: Individual
+      PTYCORP: Organization
+      JCOH: Individual
+      SPAC: Organization
+      GPAC: Organization
+
+
+  inherits: base
+  table_name: Transaction
+  column_details:
+    - raw_name: recordType
+      type: str
+      description: Seemingly always RCPT.
+
+    - raw_name: formTypeCd
+      type: str
+      description: Unclear. Options include MPAC, CORPAC, COH, JCOH, SPAC, GPAC, ..
+
+    - raw_name: schedFormTypeCd
+      type: str
+      description: Unclear. Options include A1, A2, C1, C2, C3, AJ1
+
+    - raw_name: reportInfoIdent
+      type: str
+
+    - raw_name: receivedDt
+      type: str
+      standard_name: date
+      date_format: "%Y%m%d"
+
+    - raw_name: infoOnlyFlag
+      type: str
+
+    - raw_name: filerIdent
+      type: str
+      standard_name: recipient_id
+
+    - raw_name: filerTypeCd
+      type: str
+      standard_name: recipient--transactor_type
+
+    - raw_name: filerName
+      type: str
+      standard_name: recipient--full_name
+
+    - raw_name: contributionInfoId
+      type: str
+
+    - raw_name: contributionDt
+      type: str
+
+    - raw_name: contributionAmount
+      type: Float32
+      standard_name: amount
+
+    - raw_name: contributionDescr
+      type: str
+      standard_name: description
+
+    - raw_name: itemizeFlag
+      type: str
+
+    - raw_name: travelFlag
+      type: str
+
+    - raw_name: contributorPersentTypeCd
+      type: str
+      standard_name: donor--transactor_type
+
+    - raw_name: contributorNameOrganization
+      type: str
+      standard_name: donor--organization_name
+
+    - raw_name: contributorNameLast
+      type: str
+      standard_name: donor--last_name
+
+    - raw_name: contributorNameSuffixCd
+      type: str
+      standard_name: donor--name_suffix
+
+    - raw_name: contributorNameFirst
+      type: str
+      standard_name: donor--first_name
+
+    - raw_name: contributorNamePrefixCd
+      type: str
+      standard_name: donor--name_prefix
+
+    - raw_name: contributorNameShort
+      type: str
+      standard_name: donor--name_preferred
+
+    - raw_name: contributorStreetCity
+      type: str
+      standard_name: donor--address--city
+
+    - raw_name: contributorStreetStateCd
+      type: str
+      standard_name: donor--address--state
+
+    - raw_name: contributorStreetCountyCd
+      type: str
+      standard_name: donor--address--county
+
+    - raw_name: contributorStreetCountryCd
+      type: str
+      standard_name: donor--address--country
+
+    - raw_name: contributorStreetPostalCode
+      type: str
+      standard_name: donor--address--zipcode
+
+    - raw_name: contributorStreetRegion
+      type: str
+      standard_name: donor--address--region
+
+    - raw_name: contributorEmployer
+      type: str
+      standard_name: donor--employer--organization--full_name
+
+    - raw_name: contributorOccupation
+      type: str
+      standard_name: donor--employer--role
+
+    - raw_name: contributorJobTitle
+      type: str
+      standard_name: donor--employer--job_title
+
+    - raw_name: contributorPacFein
+      type: str
+      standard_name: donor--ein
+
+    - raw_name: contributorOosPacFlag
+      type: str
+
+    - raw_name: contributorLawFirmName
+      type: str
+
+    - raw_name: contributorSpouseLawFirmName
+      type: str
+
+    - raw_name: contributorParent1LawFirmName
+      type: str
+
+    - raw_name: contributorParent2LawFirmName
+      type: str
+
+  column_order:
+    - recordType
+    - formTypeCd
+    - schedFormTypeCd
+    - reportInfoIdent
+    - receivedDt
+    - infoOnlyFlag
+    - filerIdent
+    - filerTypeCd
+    - filerName
+    - contributionInfoId
+    - contributionDt
+    - contributionAmount
+    - contributionDescr
+    - itemizeFlag
+    - travelFlag
+    - contributorPersentTypeCd
+    - contributorNameOrganization
+    - contributorNameLast
+    - contributorNameSuffixCd
+    - contributorNameFirst
+    - contributorNamePrefixCd
+    - contributorNameShort
+    - contributorStreetCity
+    - contributorStreetStateCd
+    - contributorStreetCountyCd
+    - contributorStreetCountryCd
+    - contributorStreetPostalCode
+    - contributorStreetRegion
+    - contributorEmployer
+    - contributorOccupation
+    - contributorJobTitle
+    - contributorPacFein
+    - contributorOosPacFlag
+    - contributorLawFirmName
+    - contributorSpouseLawFirmName
+    - contributorParent1LawFirmName
+    - contributorParent2LawFirmName
+
+expenditures:
+  inherits: contributions
+  table_name: Transaction
+  path_pattern: ^expend_\d{2}\.csv$
+  duplicate_columns:
+    donor--transactor_type_specific:
+      - donor--transactor_type
+
+  enum_mapper:
+    recipient--transactor_type:
+      INDIVIDUAL: Individual
+      ENTITY: Organization
+    
+    donor--transactor_type_specific:
+      COH: Candidate  # Candidate/Office Holder
+      GPAC: Committee # General Purpose Committee
+      JCOH: Candidate # Judicial Candidate/Office Holder
+      SPAC: Committee # Specific Purpose Committee
+      MPAC: Committee # Monthly Filing Gen Purp Comm
+      PTYCORP: Party # Political Party Report of Corporate/Labor Contributions
+      SCC: Committee # State County Chair Committee
+      ASIFSPAC: Committee # As If Special Purpose Committee
+      CEC: Committee  # County Exuctive Committee
+      JSPC: Committee # Judicial Special Purpose Committee
+      LEG: Caucus # Legislative Caucus
+      SPK: Candidate # Speaker of the House Candidates
+      # https://www.ethics.state.tx.us/data/forms/other/SPK_ins.pdf
+      SCPC: Committee # Specific Purpose Committee
+      MCEC: Committee # Monthly Filing County Executive Committee
+
+    donor--transactor_type:
+      COH: Individual
+      GPAC: Organization
+      JCOH: Individual
+      SPAC: Organization
+      MPAC: Organization
+      PTYCORP: Organization
+      SCC: Organization
+      ASIFSPAC: Organization
+      CEC: Organization
+      JSPC: Organization
+      LEG: Organization
+      SPK: Organization
+      SCPC: Organization
+      MCEC: Organization
+
+  column_details:
+    - raw_name: expendInfoId
+      type: str
+
+    - raw_name: expendDt
+      type: str
+      standard_name: date
+      date_format: "%Y%m%d"
+
+    - raw_name: expendAmount
+      type: Float32
+      standard_name: amount
+
+    - raw_name: expendDescr
+      type: str
+      standard_name: description
+
+    - raw_name: expendCatCd
+      type: str
+      standard_name: transaction_type
+
+    - raw_name: expendCatDescr
+      type: str
+
+    - raw_name: reportInfoIdent
+      type: str
+
+    - raw_name: receivedDt
+      type: str
+
+    - raw_name: infoOnlyFlag
+      type: str
+
+    - raw_name: filerIdent
+      type: str
+      standard_name: donor_id
+
+    - raw_name: filerTypeCd
+      type: str
+      standard_name: donor--transactor_type_specific
+
+    - raw_name: filerName
+      type: str
+      standard_name: donor--full_name
+
+    - raw_name: itemizeFlag
+      type: str
+
+    - raw_name: travelFlag
+      type: str
+
+    - raw_name: politicalExpendCd
+      type: str
+
+    - raw_name: reimburseIntendedFlag
+      type: str
+
+    - raw_name: srcCorpContribFlag
+      type: str
+
+    - raw_name: capitalLivingexpFlag
+      type: str
+
+    - raw_name: payeePersentTypeCd
+      type: str
+      standard_name: recipient--transactor_type
+
+    - raw_name: payeeNameOrganization
+      type: str
+      standard_name: recipient--full_name
+
+    - raw_name: payeeNameLast
+      type: str
+      standard_name: recipient--last_name
+
+    - raw_name: payeeNameSuffixCd
+      type: str
+      standard_name: recipient--name_suffix
+
+    - raw_name: payeeNameFirst
+      type: str
+      standard_name: recipient--first_name
+
+    - raw_name: payeeNamePrefixCd
+      type: str
+      standard_name: recipient--name_prefix
+
+    - raw_name: payeeNameShort
+      type: str
+      standard_name: recipient--name_preferred
+
+    - raw_name: payeeStreetAddr1
+      type: str
+      standard_name: recipient--address--line_1
+
+    - raw_name: payeeStreetAddr2
+      type: str
+      standard_name: recipient--address--line_2
+
+    - raw_name: payeeStreetCity
+      type: str
+      standard_name: recipient--address--city
+
+    - raw_name: payeeStreetStateCd
+      type: str
+      standard_name: recipient--address--state
+
+    - raw_name: payeeStreetCountyCd
+      type: str
+      standard_name: recipient--address--county
+
+    - raw_name: payeeStreetCountryCd
+      type: str
+      standard_name: recipient--address--country
+
+    - raw_name: payeeStreetPostalCode
+      type: str
+      standard_name: recipient--address--zipcode
+
+    - raw_name: payeeStreetRegion
+      type: str
+
+    - raw_name: creditCardIssuer
+      type: str
+
+    - raw_name: repaymentDt
+      type: str
+
+  column_order:
+    - recordType
+    - formTypeCd
+    - schedFormTypeCd
+    - reportInfoIdent
+    - receivedDt
+    - infoOnlyFlag
+    - filerIdent
+    - filerTypeCd
+    - filerName
+    - expendInfoId
+    - expendDt
+    - expendAmount
+    - expendDescr
+    - expendCatCd
+    - expendCatDescr
+    - itemizeFlag
+    - travelFlag
+    - politicalExpendCd
+    - reimburseIntendedFlag
+    - srcCorpContribFlag
+    - capitalLivingexpFlag
+    - payeePersentTypeCd
+    - payeeNameOrganization
+    - payeeNameLast
+    - payeeNameSuffixCd
+    - payeeNameFirst
+    - payeeNamePrefixCd
+    - payeeNameShort
+    - payeeStreetAddr1
+    - payeeStreetAddr2
+    - payeeStreetCity
+    - payeeStreetStateCd
+    - payeeStreetCountyCd
+    - payeeStreetCountryCd
+    - payeeStreetPostalCode
+    - payeeStreetRegion
+    - creditCardIssuer
+    - repaymentDt
+
+
+filers:
+
+  inherits: base
+  table_name: Transactor
+  path_pattern: ^filers.csv$
+
+  enum_mapper:
+    election_result--election--office_sought:
+      STATEREP: State Representative
+      JUDGEDIST: Judge
+      STATESEN: State Senator
+      JUSTICE_COA: Judge # Court of Appeals
+      JUDGEDIST_MULTI: Judge # District Judge (multi county)
+      PARTYCHAIRCO: Other # County Party Chair
+      STATEEDU: Misc. State
+      DISTATTY_MULTI: District Attorney
+      GOVERNOR: Governor
+      CRIMINAL_JUDGEDIST: Judge
+      JUDGE_COCA: Judge
+      OTHER: Other
+      JUSTICE_SC: Supreme Court Justice
+      RRCOMM: Misc. State # Railroad Commissioner
+      CHIEFJUSTICE_COA: Judge # Chief Justice of Court of Appeals
+      STATE_CHAIR: Misc. State # State Chair
+      DISTATTY: District Attorney
+      LTGOVERNOR: Lieutenant Governor
+      ATTYGEN: Attorney General
+      AGRICULTUR: Misc. State # Agriculture Commissioner
+      LANDCOMM: Misc. State # Land Commissioner
+      COMPTROLLER: Misc. State # Comptroller
+      NONE: Other
+      JUDGEDIST_FAMILY: Judge # Family Judge
+      CRIMINAL_JUDGEDIST_DAL: Judge # Criminal Judge (Dallas)
+      CRIMINAL_JUDGEDIST_TAR: Judge # Criminal Judge (Tarrant)
+      CHIEFJUSTICE_SC: Supreme Court Justice
+      PRESIDINGJUDGE_COCA: Judge # Presiding Justice of Court of Criminal Appeals
+      CRIMINAL_JUDGEDIST_JEF: Judge # Criminal Judge (Jefferson)
+      SOS: Secretary of State
+      JUDGESTATCO: Judge # State Judge
+      CRIMINAL_DISTATTY: District Attorney
+
+    transactor_type_specific:
+      COH: Candidate  # Candidate/Office Holder
+      GPAC: Committee # General Purpose Committee
+      JCOH: Candidate # Judicial Candidate/Office Holder
+      SPAC: Committee # Specific Purpose Committee
+      MPAC: Committee # Monthly Filing Gen Purp Comm
+      PTYCORP: Party # Political Party Report of Corporate/Labor Contributions
+      SCC: Committee # State County Chair Committee
+      ASIFSPAC: Committee # As If Special Purpose Committee
+      CEC: Committee  # County Exuctive Committee
+      JSPC: Committee # Judicial Special Purpose Committee
+      LEG: Caucus # Legislative Caucus
+      SPK: Candidate # Speaker of the House Candidates
+      # https://www.ethics.state.tx.us/data/forms/other/SPK_ins.pdf
+      SCPC: Committee # Specific Purpose Committee
+      MCEC: Committee # Monthly Filing County Executive Committee
+
+    transactor_type:
+      INDIVIDUAL: Individual
+      ENTITY: Organization
+
+    treasurer--member--transactor_type:
+      INDIVIDUAL: Individual
+      ENTITY: Organization
+
+    chairman--member--transactor_type:
+      INDIVIDUAL: Individual
+      ENTITY: Organization
+
+  column_details:
+    - raw_name: recordType
+      type: str
+
+    - raw_name: filerIdent
+      type: str
+      standard_name: id
+
+    - raw_name: filerTypeCd
+      type: str
+      standard_name: transactor_type_specific
+
+    - raw_name: filerName
+      type: str
+      standard_name: full_name
+
+    - raw_name: unexpendContribFilerFlag
+      type: str
+
+    - raw_name: modifiedElectCycleFlag
+      type: str
+
+    - raw_name: filerJdiCd
+      type: str
+
+    - raw_name: committeeStatusCd
+      type: str
+
+    - raw_name: ctaSeekOfficeCd
+      type: str
+      standard_name: election_result--election--office_sought
+
+    - raw_name: ctaSeekOfficeDistrict
+      type: str
+      standard_name: election_result--election--district
+
+    - raw_name: ctaSeekOfficePlace
+      type: str
+
+    - raw_name: ctaSeekOfficeDescr
+      type: str
+
+    - raw_name: ctaSeekOfficeCountyCd
+      type: str
+      standard_name: address--county
+
+    - raw_name: ctaSeekOfficeCountyDescr
+      type: str
+
+    - raw_name: filerPersentTypeCd
+      type: str
+      standard_name: transactor_type
+
+    - raw_name: filerNameOrganization
+      type: str
+      standard_name: organization_name
+
+    - raw_name: filerNameLast
+      type: str
+      standard_name: last_name
+
+    - raw_name: filerNameSuffixCd
+      type: str
+      standard_name: name_suffix
+
+    - raw_name: filerNameFirst
+      type: str
+      standard_name: first_name
+
+    - raw_name: filerNamePrefixCd
+      type: str
+      standard_name: name_prefix
+
+    - raw_name: filerNameShort
+      type: str
+      standard_name: name_preferred
+
+    - raw_name: filerStreetAddr1
+      type: str
+
+    - raw_name: filerStreetAddr2
+      type: str
+
+    - raw_name: filerStreetCity
+      type: str
+
+    - raw_name: filerStreetStateCd
+      type: str
+
+    - raw_name: filerStreetCountyCd
+      type: str
+
+    - raw_name: filerStreetCountryCd
+      type: str
+
+    - raw_name: filerStreetPostalCode
+      type: str
+
+    - raw_name: filerStreetRegion
+      type: str
+
+    - raw_name: filerMailingAddr1
+      type: str
+      standard_name: address--line_1
+
+    - raw_name: filerMailingAddr2
+      type: str
+      standard_name: address--line_2
+
+    - raw_name: filerMailingCity
+      type: str
+      standard_name: address--city
+
+    - raw_name: filerMailingStateCd
+      type: str
+      standard_name: address--state
+
+    - raw_name: filerMailingCountyCd
+      type: str
+
+    - raw_name: filerMailingCountryCd
+      type: str
+
+    - raw_name: filerMailingPostalCode
+      type: str
+      standard_name: address--zipcode
+
+    - raw_name: filerMailingRegion
+      type: str
+
+    - raw_name: filerPrimaryUsaPhoneFlag
+      type: str
+
+    - raw_name: filerPrimaryPhoneNumber
+      type: str
+      standard_name: phone_number
+
+    - raw_name: filerPrimaryPhoneExt
+      type: str
+
+    - raw_name: filerHoldOfficeCd
+      type: str
+
+    - raw_name: filerHoldOfficeDistrict
+      type: str
+
+    - raw_name: filerHoldOfficePlace
+      type: str
+
+    - raw_name: filerHoldOfficeDescr
+      type: str
+
+    - raw_name: filerHoldOfficeCountyCd
+      type: str
+
+    - raw_name: filerHoldOfficeCountyDescr
+      type: str
+
+    - raw_name: filerFilerpersStatusCd
+      type: str
+
+    - raw_name: filerEffStartDt
+      type: str
+
+    - raw_name: filerEffStopDt
+      type: str
+
+    - raw_name: contestSeekOfficeCd
+      type: str
+
+    - raw_name: contestSeekOfficeDistrict
+      type: str
+
+    - raw_name: contestSeekOfficePlace
+      type: str
+
+    - raw_name: contestSeekOfficeDescr
+      type: str
+
+    - raw_name: contestSeekOfficeCountyCd
+      type: str
+
+    - raw_name: contestSeekOfficeCountyDescr
+      type: str
+
+    - raw_name: treasPersentTypeCd
+      type: str
+      standard_name: treasurer--member--transactor_type
+
+    - raw_name: treasNameOrganization
+      type: str
+      standard_name: treasurer--member--full_name
+
+    - raw_name: treasNameLast
+      type: str
+      standard_name: treasurer--member--last_name
+
+    - raw_name: treasNameSuffixCd
+      type: str
+      standard_name: treasurer--member--name_suffix
+
+    - raw_name: treasNameFirst
+      type: str
+      standard_name: treasurer--member--first_name
+
+    - raw_name: treasNamePrefixCd
+      type: str
+      standard_name: treasurer--member--name_prefix
+
+    - raw_name: treasNameShort
+      type: str
+      standard_name: treasurer--member--name_preferred
+
+    - raw_name: treasStreetAddr1
+      type: str
+
+    - raw_name: treasStreetAddr2
+      type: str
+
+    - raw_name: treasStreetCity
+      type: str
+
+    - raw_name: treasStreetStateCd
+      type: str
+
+    - raw_name: treasStreetCountyCd
+      type: str
+
+    - raw_name: treasStreetCountryCd
+      type: str
+
+    - raw_name: treasStreetPostalCode
+      type: str
+
+    - raw_name: treasStreetRegion
+      type: str
+
+    - raw_name: treasMailingAddr1
+      type: str
+      standard_name: treasurer--member--address--line_1
+
+    - raw_name: treasMailingAddr2
+      type: str
+      standard_name: treasurer--member--address--line_2
+
+    - raw_name: treasMailingCity
+      type: str
+      standard_name: treasurer--member--address--city
+
+    - raw_name: treasMailingStateCd
+      type: str
+      standard_name: treasurer--member--address--state
+
+    - raw_name: treasMailingCountyCd
+      type: str
+
+    - raw_name: treasMailingCountryCd
+      type: str
+
+    - raw_name: treasMailingPostalCode
+      type: str
+      standard_name: treasurer--member--address--zipcode
+
+    - raw_name: treasMailingRegion
+      type: str
+
+    - raw_name: treasPrimaryUsaPhoneFlag
+      type: str
+
+    - raw_name: treasPrimaryPhoneNumber
+      type: str
+      standard_name: treasurer--member--phone_number
+
+    - raw_name: treasPrimaryPhoneExt
+      type: str
+
+    - raw_name: treasAppointorNameLast
+      type: str
+
+    - raw_name: treasAppointorNameFirst
+      type: str
+
+    - raw_name: treasFilerpersStatusCd
+      type: str
+
+    - raw_name: treasEffStartDt
+      type: str
+
+    - raw_name: treasEffStopDt
+      type: str
+
+    - raw_name: assttreasPersentTypeCd
+      type: str
+
+    - raw_name: assttreasNameOrganization
+      type: str
+
+    - raw_name: assttreasNameLast
+      type: str
+
+    - raw_name: assttreasNameSuffixCd
+      type: str
+
+    - raw_name: assttreasNameFirst
+      type: str
+
+    - raw_name: assttreasNamePrefixCd
+      type: str
+
+    - raw_name: assttreasNameShort
+      type: str
+
+    - raw_name: assttreasStreetAddr1
+      type: str
+
+    - raw_name: assttreasStreetAddr2
+      type: str
+
+    - raw_name: assttreasStreetCity
+      type: str
+
+    - raw_name: assttreasStreetStateCd
+      type: str
+
+    - raw_name: assttreasStreetCountyCd
+      type: str
+
+    - raw_name: assttreasStreetCountryCd
+      type: str
+
+    - raw_name: assttreasStreetPostalCode
+      type: str
+
+    - raw_name: assttreasStreetRegion
+      type: str
+
+    - raw_name: assttreasPrimaryUsaPhoneFlag
+      type: str
+
+    - raw_name: assttreasPrimaryPhoneNumber
+      type: str
+
+    - raw_name: assttreasPrimaryPhoneExt
+      type: str
+
+    - raw_name: assttreasAppointorNameLast
+      type: str
+
+    - raw_name: assttreasAppointorNameFirst
+      type: str
+
+    - raw_name: chairPersentTypeCd
+      type: str
+      standard_name: chairman--member--transactor_type
+
+    - raw_name: chairNameOrganization
+      type: str
+      standard_name: chairman--member--full_name
+
+    - raw_name: chairNameLast
+      type: str
+      standard_name: chairman--member--last_name
+
+    - raw_name: chairNameSuffixCd
+      type: str
+      standard_name: chairman--member--name_suffix
+
+    - raw_name: chairNameFirst
+      type: str
+      standard_name: chairman--member--first_name
+
+    - raw_name: chairNamePrefixCd
+      type: str
+      standard_name: chairman--member--name_prefix
+
+    - raw_name: chairNameShort
+      type: str
+      standard_name: chairman--member--name_preferred
+
+    - raw_name: chairStreetAddr1
+      type: str
+
+    - raw_name: chairStreetAddr2
+      type: str
+
+    - raw_name: chairStreetCity
+      type: str
+
+    - raw_name: chairStreetStateCd
+      type: str
+
+    - raw_name: chairStreetCountyCd
+      type: str
+
+    - raw_name: chairStreetCountryCd
+      type: str
+
+    - raw_name: chairStreetPostalCode
+      type: str
+
+    - raw_name: chairStreetRegion
+      type: str
+
+    - raw_name: chairMailingAddr1
+      type: str
+      standard_name: chairman--member--address--line_1
+
+    - raw_name: chairMailingAddr2
+      type: str
+      standard_name: chairman--member--address--line_2
+
+    - raw_name: chairMailingCity
+      type: str
+      standard_name: chairman--member--address--city
+
+    - raw_name: chairMailingStateCd
+      type: str
+      standard_name: chairman--member--address--state
+
+    - raw_name: chairMailingCountyCd
+      type: str
+
+    - raw_name: chairMailingCountryCd
+      type: str
+
+    - raw_name: chairMailingPostalCode
+      type: str
+      standard_name: chairman--member--address--zipcode
+
+    - raw_name: chairMailingRegion
+      type: str
+
+    - raw_name: chairPrimaryUsaPhoneFlag
+      type: str
+
+    - raw_name: chairPrimaryPhoneNumber
+      type: str
+      standard_name: chairman--member--phone_number
+
+    - raw_name: chairPrimaryPhoneExt
+      type: str
+

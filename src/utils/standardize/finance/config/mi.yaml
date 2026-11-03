@@ -1,0 +1,261 @@
+base:
+  meta: True
+  state_code: mi
+  read_csv_params:
+    encoding: mac_roman
+    on_bad_lines: warn
+    header: 0
+  include_column_order: False
+  state_code_columns:
+    - reported_state
+  year_filter_filepath_regex: ".*\\/(\\d{4})\\/[^\\/]+$"
+
+legacy_download_contributions_or_receipts:
+  inherits: base
+  table_name: Transaction
+  path_pattern: "^LegacyDownloads/(\\d{4})/(\\d{4})_mi_cfr_(contributions|receipts).*\\.csv$"
+  
+  enum_mapper:
+    recipient--transactor_type:
+      CAN: Organization
+      IND: Individual
+      GUB: Organization
+      COU: Organization
+      POL: Organization
+      BAL: Organization
+      DIS: Organization
+      STA: Organization
+
+    recipient--transactor_type_specific:
+      CAN: Candidate Committee
+      IND: Individual
+      GUB: Candidate Committee
+      COU: Party
+      POL: Committee
+      BAL: Committee
+      DIS: Committee
+      STA: Party
+
+    donor--candidate--member--election_result--election--office_sought:
+      STATE SENATE: State Senator
+      STATE REPRESENTATIVE: State Representative
+
+  duplicate_columns:
+    recipient--transactor_type:
+      - recipient--transactor_type_specific
+
+  column_details:
+    - raw_name: "doc_seq_no"
+      type: Int32
+      description: "Document sequence number"
+    - raw_name: "page_no"
+      type: Int32
+      description: "Page number"
+    - raw_name: "contribution_id"
+      type: Int32
+      # TODO: Unsure what this is. It doesn't appear unique for contributions or contributors. 
+      # Reached out to MDOS for clarification.
+    - raw_name: "cont_detail_id"
+      type: Int32
+    - raw_name: "doc_stmnt_year"
+      type: Int32
+      standard_name: reported_election_year
+      description: "Document statement year"
+    - raw_name: "doc_type_desc"
+      type: str
+      description: "Document type description"
+    - raw_name: "com_legal_name"
+      type: str
+      standard_name: recipient--full_name
+      description: "Committee legal name"
+    - raw_name: "common_name"
+      type: str
+      description: "Committee common name"
+      standard_name: recipient--name_preferred
+    - raw_name: "cfr_com_id"
+      type: str
+      standard_name: recipient_id
+      description: "Committee ID"
+    - raw_name: "com_type"
+      type: str
+      standard_name: recipient--transactor_type
+      description: "Committee type"
+    - raw_name: "can_first_name"
+      type: str
+      standard_name: recipient--candidate--member--first_name
+      description: "Candidate first name"
+    - raw_name: "can_last_name"
+      type: str
+      standard_name: recipient--candidate--member--last_name
+      description: "Candidate last name"
+    - raw_name: "contribtype"
+      type: str
+      standard_name: transaction_type
+      description: "Type of contribution"
+    - raw_name: "f_name"
+      type: str
+      standard_name: donor--first_name
+      description: "Donor first name"
+    - raw_name: "l_name_or_org"
+      type: str
+      standard_name: donor--full_name
+    - raw_name: "address"
+      type: str
+      standard_name: donor--address--line_1
+
+    - raw_name: "city"
+      type: str
+      standard_name: donor--address--city
+
+    - raw_name: "state"
+      type: str
+      standard_name: donor--address--state
+
+    - raw_name: "zip"
+      type: str
+      standard_name: donor--address--zipcode
+
+    - raw_name: "occupation"
+      type: str
+      standard_name: donor--employer--role
+
+    - raw_name: "employer"
+      type: str
+      standard_name: donor--employer--organization--full_name
+
+    - raw_name: "received_date"
+      type: str
+      standard_name: date
+      date_format: "%m/%d/%Y"
+
+    - raw_name: "amount"
+      type: str
+      standard_name: amount
+      post_load_float: true
+
+    - raw_name: "aggregate"
+      type: Float32
+
+    - raw_name: "extra_desc"
+      type: str
+      standard_name: description
+
+    - raw_name: "RUNTIME"
+      type: str
+
+legacy_download_expenditures:
+  inherits: legacy_download_contributions_or_receipts
+  table_name: Transaction
+  path_pattern: "^LegacyDownloads/(\\d{4})/(\\d{4})_mi_cfr_expenditures.*\\.csv$"
+
+  overloaded_columns:
+    "Unnamed: 28":
+      pattern: '^(?P<generated_office>STATE SENATE|STATE REPRESENTATIVE)\s+(MI)?(?P<generated_district>\d{1,3})'
+
+  filter:
+  # only including direct contributions now. Unclear what other types are and how vendor field is used.
+  # TODO: reached out to MDOS for clarification.
+    "schedule_desc":
+        - "DIRECT"
+    
+
+  column_details:
+    - raw_name: "can_or_ballot"
+      type: str
+      standard_name: donor--candidate--member--full_name
+    - raw_name: "expenditure_type"
+      type: str
+    - raw_name: "gub_account_type"
+      type: str
+    - raw_name: "gub_elec_type"
+      type: str
+    - raw_name: "expense_id"
+      type: Int32
+    - raw_name: "detail_id"
+      type: Int32
+    - raw_name: "schedule_desc"
+      type: str
+    - raw_name: "exp_desc"
+      type: str
+    - raw_name: "purpose"
+      type: str
+      standard_name: description
+    - raw_name: "extra_desc"
+      type: str
+    - raw_name: "exp_date"
+      type: str
+      date_format: "%m/%d/%Y"
+      standard_name: date
+    - raw_name: "state_loc"
+      type: str
+    - raw_name: "supp_opp"
+      type: str
+    - raw_name: "Unnamed: 28"
+      type: str
+    - raw_name: "county"
+      type: str
+    - raw_name: "debt_payment"
+      type: str
+    - raw_name: "vend_name"
+      type: str
+    - raw_name: "vend_addr"
+      type: str
+    - raw_name: "vend_city"
+      type: str
+    - raw_name: "vend_state"
+      type: str
+    - raw_name: "vend_zip"
+      type: str
+    - raw_name: "gotv_ink_ind"
+      type: str
+    - raw_name: "fundraiser"
+      type: str
+    - raw_name: "generated_office"
+      type: str
+      standard_name: donor--candidate--member--election_result--election--office_sought
+    - raw_name: "generated_district"
+      type: Int32
+      standard_name: donor--candidate--member--election_result--election--district
+
+
+  column_order:
+  - doc_seq_no
+  - expenditure_type
+  - gub_account_type
+  - gub_elec_type
+  - page_no
+  - expense_id
+  - detail_id
+  - doc_stmnt_year
+  - doc_type_desc
+  - com_legal_name
+  - common_name
+  - cfr_com_id
+  - com_type
+  - schedule_desc
+  - exp_desc
+  - purpose
+  - extra_desc
+  - f_name
+  - l_name_or_org
+  - address
+  - city
+  - state
+  - zip
+  - exp_date
+  - amount
+  - state_loc
+  - supp_opp
+  - can_or_ballot
+  - "Unnamed: 28"
+  - county
+  - debt_payment
+  - vend_name
+  - vend_addr
+  - vend_city
+  - vend_state
+  - vend_zip
+  - gotv_ink_ind
+  - fundraiser
+  - "RUNTIME: 04-10-2025 06:30:22"
+
