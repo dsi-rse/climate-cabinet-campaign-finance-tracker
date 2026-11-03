@@ -1,0 +1,4 @@
+TransactionDate,CommitteeID,CommitteeName,CommitteeGroupNumber,Amount,TransactionName,TransactionType,TransactionNameID,TransactionGroupNumber,TransactionTypeDispositionID,Occupation,Employer,City,State,ZipCode,EntityDescription,Memo,TransactionTypeId,FirstName,LastName,FilerName
+/Date(1709794800000)/,900001,Friends of Testperson,0,150.0,"Donor, Alex",Contribution from Individuals,0,0,1,,,Phoenix,AZ,85001,,,2,Alex,Donor,"Testperson, Jane"
+/Date(1709881200000)/,900001,Friends of Testperson,0,40.0,"Donor, Blair",In-State Contributions $100 or Less,0,0,1,,,,,,,,5,Blair,Donor,"Testperson, Jane"
+/Date(1709967600000)/,900001,Friends of Testperson,0,500.0,Example Industry PAC,Contributions from PACs,0,0,1,,,,,,,,115,,Example Industry PAC,"Testperson, Jane"

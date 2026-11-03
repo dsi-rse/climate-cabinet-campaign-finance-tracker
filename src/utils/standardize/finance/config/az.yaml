@@ -281,6 +281,109 @@ base:
       "14": "Yavapai"
       "15": "Yuma"
 
+    # Which party paid. Each file lists transactions from the filing committee's
+    # side, mapping the committee to recipient. Types where money leaves the
+    # committee (expenses, refunds it pays, loans it makes, payments on its
+    # loans, contributions it gives) are reversed so the committee becomes the
+    # donor. Keyed by TransactionTypeID, copied into transaction_direction by each
+    # transaction form. In the full Access export (9.66M rows, 2025-04-15) every
+    # type below except "Pay a Bill" has only negative amounts and every type not
+    # listed has only positive amounts.
+    transaction_direction:
+      "31": "reverse"  # Operating Expense - Pay Cash/Check
+      "32": "reverse"  # Operating Expense - Purchase on Terms/Credit
+      "33": "reverse"  # Independent Expenditure - Pay Cash/Check
+      "34": "reverse"  # Independent Expenditure - Purchase on Terms/Credit
+      "35": "reverse"  # Contribute to another Committee
+      "36": "reverse"  # Pay Another Committee for Shared Expense
+      "37": "reverse"  # Other Expenses - Pay Cash/Check
+      "38": "reverse"  # Other Expenses - Purchase on Terms/Credit
+      "39": "reverse"  # Lend to Committee
+      "40": "reverse"  # Transfer In Previous Committee Debt
+      "41": "reverse"  # Dispose of Remaining Surplus
+      "42": "reverse"  # Refund Candidate or Family Contribution
+      "43": "reverse"  # Refund Contribution from Individual
+      "44": "reverse"  # Refund Contribution from Committee
+      "45": "reverse"  # Refund Business Contribution
+      "46": "reverse"  # Refund Contribution Less than $50
+      "47": "reverse"  # Refund Candidate/Family In-Kind Contribution
+      "48": "reverse"  # Refund Individual In-Kind Contribution
+      "50": "reverse"  # Refund Business In-Kind Contribution
+      "51": "reverse"  # Expend Candidate/Family In-Kind Contribution
+      "52": "reverse"  # Expend Individual In-Kind Contribution
+      "53": "reverse"  # Expend In-Kind Contribution from Committee
+      "54": "reverse"  # Expend Business In-Kind Contribution
+      "55": "reverse"  # Refund CCEC $5 Qualifying Contribution
+      "56": "reverse"  # Submit $5 Qualifying Contributions to SOS
+      "57": "reverse"  # Refund CCEC Funding
+      "58": "reverse"  # Refund Other Income
+      "59": "reverse"  # Payment on Candidate/Family Loan
+      "60": "reverse"  # Payment on Individual Loan
+      "61": "reverse"  # Payment on Committee Loan
+      "62": "reverse"  # Payment on Business Loan
+      "75": "reverse"  # Pay a Bill - Operating Expenses (recorded with a positive amount)
+      "76": "reverse"  # Pay a Bill - Independent Expenditure (recorded with a positive amount)
+      "77": "reverse"  # Pay a Bill - Other Expenses (recorded with a positive amount)
+      "79": "reverse"  # Pay a Bill - Previous Debt (recorded with a positive amount)
+      "87": "reverse"  # Refund Interest and Dividends (Legacy)
+      "88": "reverse"  # Refund of Transfer From Committee (Legacy)
+      "89": "reverse"  # Retract Surplus from Previous Committee (Legacy)
+      "98": "reverse"  # Expend Personal In-Kind Contribution
+      "99": "reverse"  # Expend Individual In-Kind Contribution
+      "100": "reverse"  # Expend In-Kind Contribution from Committee
+      "101": "reverse"  # Expend Business In-Kind Contribution
+      "108": "reverse"  # Transfer Out Primary to General
+      "110": "reverse"  # Transfer Out General to Primary
+      "128": "reverse"  # Refund Contributions from Candidate Committees
+      "129": "reverse"  # Refund Contributions from PACs
+      "130": "reverse"  # Refund Contributions from Parties
+      "131": "reverse"  # Refund Contributions from Partnerships
+      "132": "reverse"  # Refund Contributions from Corps and LLCs
+      "133": "reverse"  # Refund Contributions from Labor Organizations
+      "140": "reverse"  # Refund Non-Contribution In-Kind Income
+      "141": "reverse"  # Expend Candidate Committee In-Kind Contrib
+      "142": "reverse"  # Expend PAC In-Kind Contribution
+      "143": "reverse"  # Expend Party In-Kind Contribution
+      "145": "reverse"  # Expend Corp and LLC In-Kind Contribution
+      "146": "reverse"  # Expend Labor Org In-Kind Contribution
+      "148": "reverse"  # Refund Non-Contribution Income
+      "149": "reverse"  # Payment on Candidate Committees loan
+      "150": "reverse"  # Payment on PACs loan
+      "151": "reverse"  # Payment on Parties loan
+      "153": "reverse"  # Payment on Corps and LLCs loan
+      "155": "reverse"  # Payment on Non-Influencing Loan
+      "177": "reverse"  # Expend Candidate Committee In-Kind Contrib
+      "178": "reverse"  # Expend PAC In-Kind Contribution
+      "179": "reverse"  # Expend Party In-Kind Contribution
+      "181": "reverse"  # Expend Corp and LLC In-Kind Contribution
+      "182": "reverse"  # Expend Labor Org In-Kind Contribution
+      "183": "reverse"  # Expend Non-Contribution In-Kind Income
+      "215": "reverse"  # Ind. Expend. (Non-Recall) - cash
+      "217": "reverse"  # Ind. Expend. (Non-Recall) - credit
+      "219": "reverse"  # Ballot Measure Expend. - Pay Cash/Check
+      "221": "reverse"  # Ballot Measure Expend. - Purchase on Terms/Credit
+      "223": "reverse"  # Recall Ind. Expend. - Pay Cash/Check
+      "225": "reverse"  # Recall Ind. Expend. - Purchase on Terms/Credit
+      "227": "reverse"  # Small Expenses (Paid Cash)
+      "229": "reverse"  # Small Expenses (Paid Credit)
+      "231": "reverse"  # Contribute to a Candidate Committee
+      "232": "reverse"  # Contribute to a PAC
+      "233": "reverse"  # Contribute to a Party
+      "234": "reverse"  # Give money to a Partnership
+      "235": "reverse"  # Give money to a Corporation/LLC
+      "236": "reverse"  # Give money to a Labor Organization
+      "243": "reverse"  # Pay a Bill - Independent Expenditure (recorded with a positive amount)
+      "244": "reverse"  # Pay a Bill - Ballot Measure Expenditure (recorded with a positive amount)
+      "245": "reverse"  # Loan to an Individual
+      "273": "reverse"  # Pay a Bill - Expenses less than $250 (recorded with a positive amount)
+      "274": "reverse"  # Pay a Bill - Recall Independent Expenditure (recorded with a positive amount)
+      "281": "reverse"  # In-Kind Contribution to Cand Comms
+      "282": "reverse"  # In-Kind Contribution to PACs
+      "283": "reverse"  # In-Kind Contribution to Parties
+      "284": "reverse"  # In-Kind Contribution to Partnerships
+      "285": "reverse"  # In-Kind Contribution to Corps and LLCs
+      "286": "reverse"  # In-Kind Contribution to Labor Orgs
+
 
 
 
@@ -288,6 +391,9 @@ advanced_search_transactions:
   inherits: base
   path_pattern: "^AdvancedSearch/(BallotMeasures|Income|Expenditures|IndependentExpenditures)-.*\\.csv$"
   table_name: Transaction
+  duplicate_columns:
+    transaction_type:
+      - transaction_direction
 
   column_details:
     - raw_name: "TransactionDate"
@@ -630,6 +736,9 @@ mdb:
 mdb_transactions:
   inherits: mdb
   table_name: Transaction
+  duplicate_columns:
+    transaction_type:
+      - transaction_direction
   path_pattern: "^AccessDatabase/Transactions\\.csv$"
   column_details:
 
@@ -653,14 +762,21 @@ mdb_transactions:
     - raw_name: "TransactionDate"
       type: str
       standard_name: date
-      date_format: "%m/%d/%Y"
+      # the full export writes a midnight time on every date (9/10/2003 0:00:00);
+      # the sample export in cft_test_data.zip writes the date alone
+      date_format:
+        - "%m/%d/%Y %H:%M:%S"
+        - "%m/%d/%Y"
       description: "Date of the transaction"
 
     - raw_name: "Amount"
       type: str
       standard_name: amount
       description: "Monetary amount of the transaction"
+      # written like $50.00 and ($17.85); negative means money left the
+      # committee, which transaction_direction already applies
       post_load_float: true
+      absolute_value: true
 
     - raw_name: "NameID"
       type: Int64

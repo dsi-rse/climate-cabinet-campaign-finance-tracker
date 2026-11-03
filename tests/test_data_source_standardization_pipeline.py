@@ -304,6 +304,72 @@ class TestDataStandardizer:
             "2024-03-04",
         ]
 
+    def test_standardize_date_format_tries_each_format(self, mock_config_handler):
+        """A list of formats fills each date from the first format that fits."""
+        standardizer = DataStandardizer(mock_config_handler)
+        standardizer.column_to_date_format = {"date": ["%m/%d/%Y %H:%M:%S", "%m/%d/%Y"]}
+        table = pd.DataFrame(
+            {"date": ["9/10/2003 0:00:00", "11/7/2001", None, "not a date"]}
+        )
+        result = standardizer._standardize_date_format(table)
+        assert [str(date) for date in result["date"]] == [
+            "2003-09-10",
+            "2001-11-07",
+            "<NA>",
+            "NaT",
+        ]
+
+    def test_transaction_direction_swaps_only_reversed_rows(self, mock_config_handler):
+        """Reversed rows swap donor and recipient; order and others are kept."""
+        standardizer = DataStandardizer(mock_config_handler)
+        table = pd.DataFrame(
+            {
+                "transaction_direction": ["reverse", None, "reverse", "forward"],
+                "recipient_id": ["c1", "c2", "c3", "c4"],
+                "donor--full_name": ["vendor a", "donor b", "vendor c", "donor d"],
+                "donor--employer--organization--full_name": ["x", "y", "z", "w"],
+                "amount": [1.0, 2.0, 3.0, 4.0],
+            },
+            # repeated labels, as concatenated files can produce
+            index=[0, 0, 1, 1],
+        )
+        result = standardizer._standardize_transaction_direction(table)
+
+        assert "transaction_direction" not in result.columns
+        assert result["amount"].tolist() == [1.0, 2.0, 3.0, 4.0]
+        assert result["donor_id"].tolist()[0::2] == ["c1", "c3"]
+        assert result["recipient_id"].tolist()[1::2] == ["c2", "c4"]
+        assert result["recipient--full_name"].tolist()[0::2] == [
+            "vendor a",
+            "vendor c",
+        ]
+        assert result["donor--full_name"].tolist()[1::2] == ["donor b", "donor d"]
+        # only the leading prefix is swapped
+        assert result["recipient--employer--organization--full_name"].tolist()[
+            0::2
+        ] == ["x", "z"]
+        assert "recipient--employer--organization--recipient" not in result.columns
+
+    def test_convert_strings_to_floats_reads_accounting_negatives(
+        self, mock_config_handler
+    ):
+        """'$1,234.50' and '($17.85)' become 1234.5 and -17.85."""
+        standardizer = DataStandardizer(mock_config_handler)
+        standardizer.post_load_float_columns = ["amount"]
+        table = pd.DataFrame({"amount": ["$1,234.50", "($17.85)", "-2", None, "?"]})
+        result = standardizer._convert_strings_to_floats(table)
+        assert result["amount"].tolist()[:3] == [1234.5, -17.85, -2.0]
+        assert result["amount"].iloc[3:].isna().all()
+
+    def test_take_absolute_values(self, mock_config_handler):
+        """Only columns marked absolute_value lose their sign."""
+        standardizer = DataStandardizer(mock_config_handler)
+        standardizer.absolute_value_columns = ["amount"]
+        table = pd.DataFrame({"amount": [-17.85, 50.0], "other": [-1.0, -2.0]})
+        result = standardizer._take_absolute_values(table)
+        assert result["amount"].tolist() == [17.85, 50.0]
+        assert result["other"].tolist() == [-1.0, -2.0]
+
 
 # ---- INTEGRATION TEST ----
 @pytest.fixture

@@ -1,0 +1,4 @@
+TransactionDate,CommitteeID,CommitteeName,CommitteeGroupNumber,Amount,TransactionName,TransactionType,TransactionNameID,TransactionGroupNumber,TransactionTypeDispositionID,Occupation,Employer,City,State,ZipCode,EntityDescription,Memo,TransactionTypeId,FirstName,LastName,FilerName
+/Date(1673247600000)/,900001,Friends of Testperson,0,250.0,Example Print Shop,Operating Expense - Pay Cash/Check,0,0,2,,,Tucson,AZ,,,,31,,Example Print Shop,"Testperson, Jane"
+/Date(1673334000000)/,900001,Friends of Testperson,0,1000.0,Committee to Elect Sam Sample,Contribute to a Candidate Committee,0,0,2,,,,,,,,231,,Committee to Elect Sam Sample,"Testperson, Jane"
+/Date(1673420400000)/,900001,Friends of Testperson,0,12.5,Example Diner,Small Expenses (Paid Cash),0,0,2,,,,,,,,227,,Example Diner,"Testperson, Jane"

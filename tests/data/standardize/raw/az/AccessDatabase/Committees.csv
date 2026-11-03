@@ -1,0 +1,4 @@
+CommitteeID,NameID,ChairpersonNameID,TreasurerNameID,CandidateNameID,DesigneeNameID,SponsorNameID,BallotMeasureID,PhysicalAddress1,PhysicalAddress2,PhysicalCity,PhysicalState,PhysicalZipCode,SponsorType,SponsorRelationship,OrganizationDate,TerminationDate,BenefitsBallotMeasure,FinancialInstitution1,FinancialInstitution2,FinancialInstitution3,CandidatePartyID,CandidateOfficeID,CandidateCountyID,CandidateIsIncumbent,CandidateCycleID,CandidateOtherPartyName
+900001,800101,,,,,,,,,Phoenix,AZ,,,,,,FALSE,,,,,,,FALSE,,
+900002,800102,,,,,,,,,Phoenix,AZ,,,,,,FALSE,,,,,,,FALSE,,
+900003,800103,,,,,,,,,Phoenix,AZ,,,,,,FALSE,,,,,,,FALSE,,

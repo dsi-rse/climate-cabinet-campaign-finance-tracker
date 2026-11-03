@@ -59,8 +59,7 @@ contributions:
 
     - raw_name: receivedDt
       type: str
-      standard_name: date
-      date_format: "%Y%m%d"
+      description: Date the report was received, not the date of the contribution.
 
     - raw_name: infoOnlyFlag
       type: str
@@ -82,6 +81,8 @@ contributions:
 
     - raw_name: contributionDt
       type: str
+      standard_name: date
+      date_format: "%Y%m%d"
 
     - raw_name: contributionAmount
       type: Float32
@@ -293,6 +294,10 @@ expenditures:
       type: str
 
     - raw_name: receivedDt
+      type: str
+
+    # contributions map contributionDt to date; expenditure files use expendDt
+    - raw_name: contributionDt
       type: str
 
     - raw_name: infoOnlyFlag

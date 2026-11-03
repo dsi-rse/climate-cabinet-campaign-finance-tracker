@@ -1,0 +1,4 @@
+CommitteeName,PhoneNo,Email,Status,LastAmendedDate,LastFiledDate,MasterCommitteeId,CommitteeTypeName,RegistrationDate,CommitteeAddress,MailingAddress,Chairman,Treasurer,Candidate,CandidatePhoneNo,CandidateEmail,Designee,OfficeName,PartyName,CountyName,CommitteeID
+Friends of Testperson,,,Active,,,900001,Candidate,,,,,,"Testperson, Jane",,,,Governor,Democratic,,900001
+Example Industry PAC,,,Active,,,900002,Political Action Committee,,,,,,,,,,,,,900002
+Committee to Elect Sam Sample,,,Terminated,,,900003,Candidate,,,,,,"Sample, Sam",,,,,Republican,,900003
