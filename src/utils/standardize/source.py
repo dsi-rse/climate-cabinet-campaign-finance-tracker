@@ -11,6 +11,18 @@ from utils.constants import RAW_DATA_DIRECTORY
 from utils.standardize.config import ConfigHandler
 
 
+def _swap_party_prefix(column: str) -> str:
+    """Swap a leading donor/recipient prefix: donor_id -> recipient_id
+
+    Only the leading prefix names the party; later parts (for example
+    donor--employer--...) describe that party and are left as they are.
+    """
+    for prefix, other in (("donor", "recipient"), ("recipient", "donor")):
+        if column.startswith(prefix):
+            return other + column[len(prefix) :]
+    return column
+
+
 class DataReader:
     """Reads raw state finance data into a pandas dataframe
 
@@ -357,16 +369,8 @@ class DataStandardizer:
         reverse_mask = standard_schema_table["transaction_direction"] == "reverse"
         reverse_mask = reverse_mask.fillna(False).astype(bool)
 
-        def swap_prefix(column: str) -> str:
-            # only the leading prefix names the party; later parts (for
-            # example donor--employer--...) describe that party
-            for prefix, other in (("donor", "recipient"), ("recipient", "donor")):
-                if column.startswith(prefix):
-                    return other + column[len(prefix) :]
-            return column
-
         reverse_table = standard_schema_table.loc[reverse_mask, :].rename(
-            columns=swap_prefix
+            columns=_swap_party_prefix
         )
         standard_direction_table = pd.concat(
             [standard_schema_table.loc[~reverse_mask, :], reverse_table]

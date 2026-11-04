@@ -9,6 +9,7 @@ from utils.standardize.source import (
     DataSourceStandardizationPipeline,
     DataStandardizer,
     SchemaTransformer,
+    _swap_party_prefix,
 )
 
 
@@ -369,6 +370,31 @@ class TestDataStandardizer:
         result = standardizer._take_absolute_values(table)
         assert result["amount"].tolist() == [17.85, 50.0]
         assert result["other"].tolist() == [-1.0, -2.0]
+
+
+@pytest.mark.parametrize(
+    ("column", "expected"),
+    [
+        ("donor_id", "recipient_id"),
+        ("recipient_id", "donor_id"),
+        ("donor--full_name", "recipient--full_name"),
+        # only the leading prefix names the party; str.replace would also
+        # change the second "recipient" here
+        ("donor--recipient_note", "recipient--recipient_note"),
+        (
+            "donor--employer--organization--full_name",
+            "recipient--employer--organization--full_name",
+        ),
+        (
+            "recipient--candidate--member--full_name",
+            "donor--candidate--member--full_name",
+        ),
+        ("amount", "amount"),
+        ("transaction_direction", "transaction_direction"),
+    ],
+)
+def test_swap_party_prefix(column, expected):
+    assert _swap_party_prefix(column) == expected
 
 
 # ---- INTEGRATION TEST ----
