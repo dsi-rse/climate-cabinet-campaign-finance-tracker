@@ -474,29 +474,35 @@ def tx() -> None:
         "itemizeFlag": "Y",
         "travelFlag": "N",
     }
-    write(
-        directory / "contribs_01.csv",
-        TX_CONTRIBUTIONS,
-        [
-            {
-                **pac,
-                "recordType": "RCPT",
-                "schedFormTypeCd": "A1",
-                "reportInfoIdent": str(500 + i),
-                # the report arrives weeks after the contribution
-                "receivedDt": f"2009020{i + 1}",
-                "contributionInfoId": str(700 + i),
-                "contributionDt": f"2008122{i}",
-                "contributionAmount": "100.00",
-                "contributorPersentTypeCd": "INDIVIDUAL",
-                "contributorNameLast": f"Testperson{i}",
-                "contributorNameFirst": "Jane",
-                "contributorStreetCity": "Austin",
-                "contributorStreetStateCd": "TX",
-            }
-            for i in range(3)
-        ],
-    )
+    # Contribution files are numbered from contribs_01; since 2026 the numbers
+    # pass 99 (contribs_100.csv and up)
+    for filename, last_name, received, given, first_id in [
+        ("contribs_01.csv", "Testperson", "2009020{}", "2008122{}", 500),
+        ("contribs_100.csv", "Laterperson", "2026030{}", "2026022{}", 900),
+    ]:
+        write(
+            directory / filename,
+            TX_CONTRIBUTIONS,
+            [
+                {
+                    **pac,
+                    "recordType": "RCPT",
+                    "schedFormTypeCd": "A1",
+                    "reportInfoIdent": str(first_id + i),
+                    # the report arrives weeks after the contribution
+                    "receivedDt": received.format(i + 1),
+                    "contributionInfoId": str(first_id + 200 + i),
+                    "contributionDt": given.format(i),
+                    "contributionAmount": "100.00",
+                    "contributorPersentTypeCd": "INDIVIDUAL",
+                    "contributorNameLast": f"{last_name}{i}",
+                    "contributorNameFirst": "Jane",
+                    "contributorStreetCity": "Austin",
+                    "contributorStreetStateCd": "TX",
+                }
+                for i in range(3)
+            ],
+        )
     write(
         directory / "expend_01.csv",
         TX_EXPENDITURES,
