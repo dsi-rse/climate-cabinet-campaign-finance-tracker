@@ -16,12 +16,9 @@ legacy_download_contributions_or_receipts:
   path_pattern: "^LegacyDownloads/(\\d{4})/(\\d{4})_mi_cfr_(contributions|receipts).*\\.csv$"
   
   enum_mapper:
-    # com_type is the filing committee's type. IND is an "independent
-    # committee": a PAC qualified to give at the higher limit (for example
-    # Comerica PAC), not an individual.
     recipient--transactor_type: &committee_transactor_type
       CAN: Organization
-      IND: Organization
+      IND: Organization  # Independent Committee
       GUB: Organization
       COU: Organization
       POL: Organization
