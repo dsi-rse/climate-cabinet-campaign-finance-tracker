@@ -7,6 +7,7 @@ a name, or reads the wrong date column fails here rather than only showing up
 in the final data.
 """
 
+import importlib.util
 from pathlib import Path
 
 import pandas as pd
@@ -19,15 +20,26 @@ CONFIG_DIRECTORY = (
 RAW_FIXTURE_DIRECTORY = Path(__file__).parent / "data" / "standardize" / "raw"
 
 
-def standardize(state: str, form: str) -> pd.DataFrame:
+def standardize(
+    state: str, form: str, state_data_directory: Path | None = None
+) -> pd.DataFrame:
     pipeline = DataSourceStandardizationPipeline(
         state_code=state,
         form_code=form,
         config_file=CONFIG_DIRECTORY / f"{state}.yaml",
     )
     return pipeline.load_and_standardize_data_source(
-        state_data_directory=RAW_FIXTURE_DIRECTORY / state
+        state_data_directory=state_data_directory or RAW_FIXTURE_DIRECTORY / state
     )
+
+
+def load_fixture_generator(name: str):
+    """Import a fixture generator script from tests/data/standardize"""
+    path = Path(__file__).parent / "data" / "standardize" / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def only_row(table: pd.DataFrame, column: str, value) -> pd.Series:
@@ -299,6 +311,12 @@ def test_tx_contribution_is_dated_when_given_not_when_reported():
     )
 
 
+def test_tx_contribution_files_numbered_past_99_are_read():
+    table = standardize("tx", "contributions")
+    row = only_row(table, "donor--last_name", "Laterperson0")
+    assert_row(row, {"recipient_id": "00090001", "date": "2026-02-20"})
+
+
 def test_tx_expenditure_is_dated_when_spent_not_when_reported():
     table = standardize("tx", "expenditures")
     row = only_row(table, "recipient--full_name", "Sample Campaign 0")
@@ -310,5 +328,55 @@ def test_tx_expenditure_is_dated_when_spent_not_when_reported():
             "amount": "500.0",
             # expendDt; the report was received 2002-11-01
             "date": "2002-09-20",
+        },
+    )
+
+
+# ---- Minnesota ----
+
+MN_EXPENSE = {
+    "donor_id": "90001",
+    "donor--full_name": "Testperson, Jane House Committee",
+    "donor--candidate--member--last_name": "Testperson",
+    "recipient--full_name": "Example Print Shop",
+    "recipient--address--city": "Duluth",
+    "recipient--address--state": "MN",
+    "date": "2026-08-14",
+}
+
+
+def test_mn_expenditure_is_paid_by_the_committee():
+    row = only_row(standardize("mn", "expenditures"), "amount", 250.0)
+    assert_row(row, MN_EXPENSE)
+
+
+def test_mn_expenditures_with_vendor_street_address_still_load(tmp_path):
+    # files downloaded before 2026 have Vendor address 1 and 2
+    generator = load_fixture_generator("make_mn_fixtures")
+    generator.write(
+        tmp_path / "expenditures_all.csv",
+        generator.MN_OLD_EXPENDITURES,
+        generator.EXPENDITURE_ROWS,
+    )
+    table = standardize("mn", "expenditures", state_data_directory=tmp_path)
+    assert len(table) == len(generator.EXPENDITURE_ROWS)
+    row = only_row(table, "amount", 250.0)
+    assert_row(row, {**MN_EXPENSE, "recipient--address--line_1": "100 Main St"})
+
+
+def test_mn_independent_expenditure_names_spender_and_target():
+    table = standardize("mn", "independent_expenditures")
+    row = only_row(table, "amount", 5000.0)
+    assert_row(
+        row,
+        {
+            "donor_id": "80000",
+            "donor--full_name": "Example Action Fund",
+            "affected_party_id": "90004",
+            "affected_party--last_name": "Sample",
+            "influence_type": "positive",
+            "recipient--full_name": "Example Mailhouse 0",
+            "recipient--address--state": "IA",
+            "date": "2026-09-20",
         },
     )

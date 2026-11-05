@@ -1,0 +1,4 @@
+Spender,Spender Reg Num,Spender type,Spender sub-type,Affected Comte Name,Affected Cmte Reg Num,For /Against,Year,Date,Type,Amount,Unpaid amount,In kind?,In kind descr,Purpose,Vendor name,Vendor city,Vendor State,Vendor zip
+Example Action Fund,80000,PCF,IEF,"Sample, Sam Senate Committee",90004,For,2026,2026-09-20,Independent Expenditure,5000.00,.00,No,,Mail,Example Mailhouse 0,Des Moines,IA,50309
+Example Action Fund,80001,PCF,IEF,"Sample, Sam Senate Committee",90004,Against,2026,2026-09-21,Independent Expenditure,5001.00,.00,No,,Mail,Example Mailhouse 1,Des Moines,IA,50309
+Example Action Fund,80002,PCF,IEF,"Sample, Sam Senate Committee",90004,Against,2026,2026-09-22,Independent Expenditure,5002.00,.00,No,,Mail,Example Mailhouse 2,Des Moines,IA,50309
