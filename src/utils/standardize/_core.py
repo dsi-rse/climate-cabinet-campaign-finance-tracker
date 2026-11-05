@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from utils.standardize.source import COERCED_VALUE_REPORT_COLUMNS
 from utils.standardize.source_standardization_registry import (
     get_registered_sources,
     register_all_data_source_pipelines,
@@ -15,7 +16,7 @@ def standardize_state(
     start_year: int = None,
     end_year: int = None,
     input_directory: Path | None = None,
-) -> dict[str, pd.DataFrame]:
+) -> tuple[dict[str, pd.DataFrame], pd.DataFrame]:
     """From raw datafiles, standardize data from specified state.
 
     Args:
@@ -29,12 +30,21 @@ def standardize_state(
             subdirectory of this directory (i.e. data/raw/IL)
 
     Returns:
-        dictionary mapping table name to tables of that type
+        A dictionary mapping table name to tables of that type, and a table of
+        the raw values that became null during standardization because they
+        were not in an enum mapping, did not fit the date format, or were not
+        numbers. It has one row per state, form, file, column, step and
+        distinct raw value, with how many times that value occurred.
+
+    Raises:
+        HeaderMismatchError: if a file's columns are not the ones its form
+            reads by position
     """
     register_all_data_source_pipelines(state)
     all_data_source_pipelines = get_registered_sources()
 
     database = {}
+    coerced_value_tables = []
     for source in all_data_source_pipelines[state]:
         standardized_source_table = source.load_and_standardize_data_source(
             start_year=start_year,
@@ -47,5 +57,17 @@ def standardize_state(
         database[source.table_name] = pd.concat(
             [database[source.table_name], standardized_source_table],
         )
+        # special sources may override loading and not record coerced values
+        source_coerced_values = getattr(source, "coerced_values", None)
+        if (
+            isinstance(source_coerced_values, pd.DataFrame)
+            and not source_coerced_values.empty
+        ):
+            coerced_value_tables.append(source_coerced_values)
 
-    return database
+    coerced_values = (
+        pd.concat(coerced_value_tables, ignore_index=True)
+        if coerced_value_tables
+        else pd.DataFrame(columns=COERCED_VALUE_REPORT_COLUMNS)
+    )
+    return database, coerced_values

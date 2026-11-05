@@ -33,6 +33,11 @@ Please see [Configuration File Schema](#configuration-file-schema) for more deta
 
 Add synthetic raw files for the state under `tests/data/standardize/raw/<state code>/`, written by a script next to them (see `make_pa_fixtures.py` and `make_az_mi_tx_fixtures.py`). Copy the real headers and value formats (dates, amounts, negatives) from the state's files, but use fake names, ids and amounts. Each file needs three rows, and every form needs at least one file: `tests/test_state_configs.py` checks that each file matches exactly one form and loads every row. Then add rows to `tests/test_state_golden_rows.py` that check, for each form, who paid whom, the amount, the date and the type. A row count alone won't catch a swapped donor and recipient or a date read from the wrong column.
 
+### Checks when standardizing
+
+- **Headers.** A form that reads columns by position (the default, `include_column_order: True`) has its `column_order` checked against each file before the file is read. With `header: 0`, the file's header must match `column_order`, ignoring case, spacing and a byte order mark. With `header: null`, the first row must have as many columns as `column_order` and must not be the header itself. Any other file raises `HeaderMismatchError`, which names the file and the columns that differ, so a state adding, dropping or reordering columns stops the run instead of putting values under the wrong names. Forms that read columns by header name (`include_column_order: False`) are not checked.
+- **Values that become null.** A raw value becomes null if it is missing from an `enum_mapper` mapping, doesn't fit its `date_format`, or isn't a number in a `post_load_float` column. Each file that has such values logs a warning with counts per column. `cft standardize` writes every distinct value, with its count, form and file, to `standardized/<state>/reports/coerced_values.csv`. Values mapped to null on purpose (a key with an empty value) and unmapped `transaction_direction` values are not reported. Check this report when adding a state or a mapping: most rows mean a mapping is missing a value.
+
 
 ### Configuration File Schema
 
@@ -55,7 +60,7 @@ Both first level keys have the same set of subkeys:
 - `state_code`: two letter lowercase state code
 - `meta`: True if this block is only an abstract or meta class that is used by other forms.
 - `read_csv_params`: keyword arguments to be passed to pandas [read_csv](https://pandas.pydata.org/docs/reference/api/pandas.read_csv.html) method.
-- `include_column_order`: boolean. If True, 'names' is passed as a read_csv param with the column_order. If False, column order will be inferred from header row (either provided in `read_csv_params` or 0)
+- `include_column_order`: boolean. If True, 'names' is passed as a read_csv param with the column_order, and each file's header is checked against it (see [Checks when standardizing](#checks-when-standardizing)). If False, column order will be inferred from header row (either provided in `read_csv_params` or 0)
 - `column_details`: list of column properties where each may have the following keys:
     - `raw_name`: the name of the column as it appears in the raw data
     - `type`: Pandas dtype of the column

@@ -1,5 +1,6 @@
 """Represents raw input data from states"""
 
+import logging
 import re
 from pathlib import Path
 
@@ -9,6 +10,87 @@ from tqdm import tqdm
 
 from utils.constants import RAW_DATA_DIRECTORY
 from utils.standardize.config import ConfigHandler
+
+logger = logging.getLogger(__name__)
+
+# a UTF-8 byte order mark, as read in UTF-8 and in latin-1 (the AZ Access
+# export starts with one)
+_BYTE_ORDER_MARKS = ("\ufeff", "\u00ef\u00bb\u00bf")
+# read_csv arguments that don't apply when reading only a file's first row
+_FIRST_ROW_IGNORED_PARAMS = (
+    "names",
+    "header",
+    "dtype",
+    "usecols",
+    "index_col",
+    "nrows",
+    "na_values",
+    "keep_default_na",
+)
+# How many differing columns a header error lists
+_MAX_LISTED_HEADER_DIFFERENCES = 5
+
+# Enum columns whose mapping deliberately covers only some values. Their
+# unmapped values are expected to become null and are not reported.
+_PARTIAL_ENUM_COLUMNS = ("transaction_direction",)
+COERCED_VALUE_COLUMNS = ["column", "step", "raw_value", "count"]
+COERCED_VALUE_REPORT_COLUMNS = ["state", "form", "file", *COERCED_VALUE_COLUMNS]
+
+
+def _file_label(path: Path, state_data_directory: Path) -> str:
+    """A raw file's path relative to the state's data directory, if inside it"""
+    try:
+        return path.relative_to(state_data_directory).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+class HeaderMismatchError(ValueError):
+    """A raw file's columns do not match the columns its form expects"""
+
+
+def _normalize_header_name(name: object) -> str:
+    """Compare header names ignoring case, spacing and a byte order mark"""
+    text = "" if pd.isna(name) else str(name)
+    for mark in _BYTE_ORDER_MARKS:
+        text = text.removeprefix(mark)
+    return " ".join(text.split()).lower()
+
+
+def _headers_match(first_row: list[str], expected: list[str]) -> bool:
+    """True if a file's first row is the expected header"""
+    return [_normalize_header_name(name) for name in first_row] == [
+        _normalize_header_name(name) for name in expected
+    ]
+
+
+def _describe_header_mismatch(found: list[str], expected: list[str]) -> str:
+    """Explain how a file's header differs from the form's column_order"""
+    details = []
+    if len(found) != len(expected):
+        details.append(
+            f"the file has {len(found)} columns and the form expects {len(expected)}"
+        )
+    differences = [
+        (position, found_name, expected_name)
+        for position, (found_name, expected_name) in enumerate(
+            zip(found, expected, strict=False), start=1
+        )
+        if _normalize_header_name(found_name) != _normalize_header_name(expected_name)
+    ]
+    details.extend(
+        f"column {position} is {found_name!r} in the file and {expected_name!r} in"
+        " the form"
+        for position, found_name, expected_name in differences[
+            :_MAX_LISTED_HEADER_DIFFERENCES
+        ]
+    )
+    if len(differences) > _MAX_LISTED_HEADER_DIFFERENCES:
+        details.append(
+            f"and {len(differences) - _MAX_LISTED_HEADER_DIFFERENCES} more columns"
+            " differ"
+        )
+    return "; ".join(details)
 
 
 def _swap_party_prefix(column: str) -> str:
@@ -125,6 +207,75 @@ class DataReader:
         """Drop rows with all blank values"""
         return raw_table.dropna(how="all")
 
+    def _read_first_row(self, path: str | Path) -> list[str]:
+        """Read a file's first row as text, parsed like the rest of the file"""
+        params = {
+            key: value
+            for key, value in self.read_csv_params.items()
+            if key not in _FIRST_ROW_IGNORED_PARAMS
+        }
+        try:
+            first_row = pd.read_csv(
+                str(path),
+                header=None,
+                nrows=1,
+                dtype=str,
+                keep_default_na=False,
+                **params,
+            )
+        except pd.errors.EmptyDataError:
+            return []
+        if first_row.empty:
+            return []
+        return first_row.iloc[0].tolist()
+
+    def _check_header(self, path: str | Path) -> None:
+        """Check that a file's columns are the ones the form assigns by position
+
+        Forms with a column_order read columns by position, so a state adding,
+        dropping or reordering columns would put values under the wrong names.
+        If the form expects a header row (header: 0), it must match the
+        column_order, ignoring case, spacing and a byte order mark. If the
+        form expects no header,
+        the first row must have the right number of columns and must not be
+        the header itself (it would otherwise be read as data).
+
+        Raises:
+            HeaderMismatchError: if the file does not match the form
+        """
+        names = self.read_csv_params.get("names")
+        header = self.read_csv_params.get("header", 0)
+        if names is None or header not in (0, None):
+            return
+        first_row = self._read_first_row(path)
+        if not first_row:
+            return
+        if header == 0 and not _headers_match(first_row, names):
+            known_names = {_normalize_header_name(name) for name in names}
+            no_header_hint = (
+                ". None of the first row's values is a column name, so the file"
+                " may have no header row (if so, set header: null in"
+                " read_csv_params)"
+                if not known_names & {_normalize_header_name(v) for v in first_row}
+                else ""
+            )
+            raise HeaderMismatchError(
+                f"{path}: the header does not match the form's column_order: "
+                + _describe_header_mismatch(first_row, names)
+                + no_header_hint
+            )
+        if header is None:
+            if _headers_match(first_row, names):
+                raise HeaderMismatchError(
+                    f"{path}: the first row is a header, but the form reads it as"
+                    " data. Set header: 0 in read_csv_params."
+                )
+            if len(first_row) != len(names):
+                raise HeaderMismatchError(
+                    f"{path}: the first row has {len(first_row)} columns and the"
+                    f" form's column_order has {len(names)}"
+                )
+
     def read_tabular_data(
         self,
         path: str | Path,
@@ -142,9 +293,15 @@ class DataReader:
         permissible modification is the dropping of segments of data that are
         malformed and not able to be read into a dataframe. These rows should
         be (TODO #107) reported.
+
+        Raises:
+            HeaderMismatchError: if the form reads columns by position and the
+                file's columns are not the ones it expects
         """
         if not self._is_filepath_in_year_range(path, start_year, end_year):
             return pd.DataFrame()
+
+        self._check_header(path)
 
         table = pd.read_csv(
             str(path),
@@ -277,19 +434,76 @@ class DataStandardizer:
         self.null_values = config_handler._null_values
         self.post_load_float_columns = config_handler.post_load_float_columns
         self.absolute_value_columns = config_handler.absolute_value_columns
+        self.coerced_values = pd.DataFrame(columns=COERCED_VALUE_COLUMNS)
+        self._coerced_value_tables = []
+
+    def _record_coerced_values(
+        self,
+        column: str,
+        step: str,
+        raw_values: pd.Series,
+        converted_values: pd.Series,
+        expected_null: np.ndarray | None = None,
+    ) -> None:
+        """Record raw values that a conversion step turned into nulls
+
+        A value counts as coerced if it was present (not null and not blank)
+        before the step and is null after it. Rows are matched by position, so
+        repeated index labels are fine.
+
+        Args:
+            column: standard name of the converted column
+            step: name of the conversion ('enum', 'date' or 'number')
+            raw_values: the column before conversion
+            converted_values: the column after conversion, in the same row order
+            expected_null: optional boolean array of rows whose null result is
+                intended (for example, enum values mapped to null on purpose)
+        """
+        coerced = raw_values.notna().to_numpy() & converted_values.isna().to_numpy()
+        if expected_null is not None:
+            coerced &= ~expected_null
+        if not coerced.any():
+            return
+        # only rows that became null are converted to text, so columns with
+        # nothing coerced cost two null checks
+        raw_text = raw_values[coerced].astype("string").str.strip()
+        counts = raw_text[raw_text != ""].value_counts()
+        if counts.empty:
+            return
+        self._coerced_value_tables.append(
+            pd.DataFrame(
+                {
+                    "column": column,
+                    "step": step,
+                    "raw_value": counts.index.astype(str),
+                    "count": counts.to_numpy(),
+                }
+            )
+        )
 
     def _standardize_enums(self, standard_schema_table: pd.DataFrame) -> pd.DataFrame:
-        """Rename entity type columns"""
+        """Map raw enum values to standard values
+
+        Raw values missing from a column's mapping become null and are recorded
+        in coerced_values, except in columns whose mapping deliberately covers
+        only some values (transaction_direction).
+        """
         for column_name, column_enum_map in self.enum_mapper.items():
             if column_name not in standard_schema_table.columns:
                 continue
-            # map each value in the table's column according to the provided enum mapper
-            standard_schema_table[column_name] = standard_schema_table[
-                column_name
-            ].astype(str)
-            standard_schema_table[column_name] = standard_schema_table[column_name].map(
-                column_enum_map
-            )
+            raw_values = standard_schema_table[column_name]
+            raw_text = raw_values.astype(str)
+            mapped_values = raw_text.map(column_enum_map)
+            if column_name not in _PARTIAL_ENUM_COLUMNS:
+                # a value mapped to null on purpose is not coerced
+                self._record_coerced_values(
+                    column_name,
+                    "enum",
+                    raw_values,
+                    mapped_values,
+                    expected_null=raw_text.isin(list(column_enum_map)).to_numpy(),
+                )
+            standard_schema_table[column_name] = mapped_values
         return standard_schema_table
 
     def _standardize_date_format(
@@ -341,6 +555,12 @@ class DataStandardizer:
                     )
                 standard_schema_table.loc[~na_mask, temp_column] = parsed_dates.dt.date
 
+            self._record_coerced_values(
+                date_column,
+                "date",
+                standard_schema_table[date_column],
+                standard_schema_table[temp_column],
+            )
             standard_schema_table = standard_schema_table.drop(columns=date_column)
             standard_schema_table = standard_schema_table.rename(
                 columns={temp_column: date_column}
@@ -423,11 +643,14 @@ class DataStandardizer:
         for column in self.post_load_float_columns:
             if column not in standard_schema_table.columns:
                 continue
-            values = standard_schema_table[column].str.strip()
+            raw_values = standard_schema_table[column]
+            values = raw_values.str.strip()
             in_parentheses = values.str.match(r"^\(.*\)$").fillna(False).astype(bool)
             values = values.str.replace(r"[,$()]", "", regex=True)
             values = values.where(~in_parentheses, "-" + values)
-            standard_schema_table[column] = pd.to_numeric(values, errors="coerce")
+            numbers = pd.to_numeric(values, errors="coerce")
+            self._record_coerced_values(column, "number", raw_values, numbers)
+            standard_schema_table[column] = numbers
         return standard_schema_table
 
     def _take_absolute_values(
@@ -463,7 +686,13 @@ class DataStandardizer:
             enum_mapper: dict mapping column names to dicts mapping
                 raw values in the enum column to their standard values
             column_to_date_format: dict mapping column names to their date format
+
+        After each call, coerced_values lists the raw values this call turned
+        into nulls because they were not in an enum mapping, did not fit the
+        date format, or were not numbers: one row per column, step and distinct
+        raw value, with how many times it occurred.
         """
+        self._coerced_value_tables = []
         standard_schema_table = self._standardize_null_values(standard_schema_table)
         if enum_mapper is not None:
             self.enum_mapper = enum_mapper
@@ -477,6 +706,11 @@ class DataStandardizer:
         standard_data_table = self._standardize_organization_name(standard_data_table)
         standard_data_table = self._convert_strings_to_floats(standard_data_table)
         standard_data_table = self._take_absolute_values(standard_data_table)
+        self.coerced_values = (
+            pd.concat(self._coerced_value_tables, ignore_index=True)
+            if self._coerced_value_tables
+            else pd.DataFrame(columns=COERCED_VALUE_COLUMNS)
+        )
         return standard_data_table
 
 
@@ -529,6 +763,26 @@ class DataSourceStandardizationPipeline:
             self.data_standardizer = DataStandardizer(self.config_handler)
         else:
             self.data_standardizer = data_standardizer
+        self.coerced_values = pd.DataFrame(columns=COERCED_VALUE_REPORT_COLUMNS)
+
+    def _collect_coerced_values(
+        self, coerced_values: pd.DataFrame, file_name: str
+    ) -> pd.DataFrame | None:
+        """Label one file's coerced values with their source and log a summary"""
+        if not isinstance(coerced_values, pd.DataFrame) or coerced_values.empty:
+            return None
+        per_column = coerced_values.groupby("column", sort=False)["count"].sum()
+        logger.warning(
+            "%s %s %s: %d values could not be read and became null (%s)",
+            self.state_code,
+            self.form_code,
+            file_name,
+            per_column.sum(),
+            ", ".join(f"{column}: {count}" for column, count in per_column.items()),
+        )
+        return coerced_values.assign(
+            state=self.state_code, form=self.form_code, file=file_name
+        )[COERCED_VALUE_REPORT_COLUMNS]
 
     def _raw_data_file_paths(
         self, state_data_directory: Path | None = None
@@ -564,9 +818,20 @@ class DataSourceStandardizationPipeline:
             state_data_directory: Directory containing raw data for state. This the path
                 up to what is described in the config file.
                 Defaults to: repo root / data / raw / state_code
+
+        Afterwards, coerced_values lists, for each file, the raw values that
+        became null during standardization (see DataStandardizer.standardize_data).
+
+        Raises:
+            HeaderMismatchError: if a file's columns are not the ones the form
+                reads by position
         """
+        if state_data_directory is None:
+            state_data_directory = RAW_DATA_DIRECTORY / self.state_code.upper()
         raw_data_file_paths = self._raw_data_file_paths(state_data_directory)
         standardized_tables = []
+        coerced_value_tables = []
+        self.coerced_values = pd.DataFrame(columns=COERCED_VALUE_REPORT_COLUMNS)
         if raw_data_file_paths == []:
             return pd.DataFrame()
 
@@ -596,10 +861,18 @@ class DataSourceStandardizationPipeline:
                 standard_schema_table
             )
             standardized_tables.append(standard_data_table)
+            file_coerced_values = self._collect_coerced_values(
+                getattr(self.data_standardizer, "coerced_values", None),
+                _file_label(data_path, state_data_directory),
+            )
+            if file_coerced_values is not None:
+                coerced_value_tables.append(file_coerced_values)
 
         # Clear the description when done
         progress_bar.set_description("Processing complete")
         progress_bar.close()
+        if coerced_value_tables:
+            self.coerced_values = pd.concat(coerced_value_tables, ignore_index=True)
 
         if standardized_tables:
             return pd.concat(standardized_tables, ignore_index=True)
