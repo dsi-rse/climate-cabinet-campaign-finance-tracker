@@ -11,7 +11,8 @@ base:
     - reported_state
 
 contributions:
-  path_pattern: ^contribs_\d{2}\.csv$
+  # numbered contribs_01 upward; past 99 since 2026 (contribs_100.csv)
+  path_pattern: ^contribs_\d{2,}\.csv$
   duplicate_columns:
     recipient--transactor_type:
       - recipient--transactor_type_specific
@@ -59,8 +60,7 @@ contributions:
 
     - raw_name: receivedDt
       type: str
-      standard_name: date
-      date_format: "%Y%m%d"
+      description: Date the report was received, not the date of the contribution.
 
     - raw_name: infoOnlyFlag
       type: str
@@ -82,6 +82,8 @@ contributions:
 
     - raw_name: contributionDt
       type: str
+      standard_name: date
+      date_format: "%Y%m%d"
 
     - raw_name: contributionAmount
       type: Float32
@@ -222,7 +224,7 @@ contributions:
 expenditures:
   inherits: contributions
   table_name: Transaction
-  path_pattern: ^expend_\d{2}\.csv$
+  path_pattern: ^expend_\d{2,}\.csv$
   duplicate_columns:
     donor--transactor_type_specific:
       - donor--transactor_type
@@ -293,6 +295,10 @@ expenditures:
       type: str
 
     - raw_name: receivedDt
+      type: str
+
+    # contributions map contributionDt to date; expenditure files use expendDt
+    - raw_name: contributionDt
       type: str
 
     - raw_name: infoOnlyFlag

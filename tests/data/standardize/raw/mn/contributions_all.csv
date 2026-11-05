@@ -1,0 +1,4 @@
+Recipient reg num,Recipient,Recipient type,Recipient subtype,Amount,Receipt date,Year,Contributor,Contrib Reg Num,Contrib type,Receipt type,In kind?,In-kind descr,Contrib zip,Contrib Employer name
+90001,"Testperson, Jane House Committee",PCC,,100.0000,2026-07-10,2026,"Donor, Alex0",,Individual,Contribution,No,,55401,
+90001,"Testperson, Jane House Committee",PCC,,101.0000,2026-07-11,2026,"Donor, Alex1",,Individual,Contribution,No,,55401,
+90001,"Testperson, Jane House Committee",PCC,,102.0000,2026-07-12,2026,"Donor, Alex2",,Individual,Contribution,No,,55401,

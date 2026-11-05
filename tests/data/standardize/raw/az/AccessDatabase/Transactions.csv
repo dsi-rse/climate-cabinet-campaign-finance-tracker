@@ -1,0 +1,4 @@
+TransactionID,ModifiesTransactionID,TransactionTypeID,CommitteeID,TransactionDate,Amount,NameID,IsForBenefit,SubjectCommitteeID,Memo,CategoryID,AccountType,Deleted
+1,1,2,900001,9/10/2003 0:00:00,$50.00,800001,0,,,,,0
+2,2,31,900001,12/31/1999 0:00:00,($745.00),800002,0,,Yard signs,,,0
+3,3,75,900001,12/2/1996 0:00:00,$421.37,800002,0,,,,,0

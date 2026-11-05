@@ -1,0 +1,4 @@
+NameID,NameGroupID,EntityTypeID,LastName,FirstName,MiddleName,Suffix,Address1,Address2,City,State,ZipCode,CountyID,Occupation,Employer
+800001,1,1,DONOR,ALEX,,,,,Phoenix,AZ,,,,
+800002,2,1,EXAMPLE PRINT SHOP,,,,,,,,,,,
+800101,3,1,FRIENDS OF TESTPERSON,,,,,,,,,,,

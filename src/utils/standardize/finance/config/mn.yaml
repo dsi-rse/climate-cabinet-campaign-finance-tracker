@@ -185,6 +185,9 @@ expenditures:
   inherits: base
   table_name: Transaction
   path_pattern: "^expenditures_all.csv$"
+  # Columns are read by header name: since 2026 the file leaves out Vendor
+  # address 1 and 2, and older downloads still have them
+  include_column_order: false
 
   overloaded_columns:
     "Committee name":
@@ -248,12 +251,14 @@ expenditures:
 
     - raw_name: Vendor name
       type: str
-      standard_name: recipient--name
+      standard_name: recipient--full_name
 
-    - raw_name: Vendor address 1  
+    # only in files downloaded before 2026
+    - raw_name: Vendor address 1
       type: str
       standard_name: recipient--address--line_1
-      
+
+    # only in files downloaded before 2026
     - raw_name: Vendor address 2
       type: str
       standard_name: recipient--address--line_2
@@ -297,7 +302,7 @@ expenditures:
     - raw_name: In-kind descr
       type: str
 
-    - raw_name: In kind?
+    - raw_name: In-kind?
       type: str
 
     - raw_name: Affected committee name
@@ -330,28 +335,6 @@ expenditures:
     - raw_name: generated_office_sought
       type: str
       standard_name: donor--candidate--member--election_result--election--office_sought
-
-  column_order:
-    - "Committee reg num"
-    - "Committee name"
-    - "Entity type"
-    - "Entity sub-type"
-    - "Vendor name"
-    - "Vendor address 1"
-    - "Vendor address 2"
-    - "Vendor city"
-    - "Vendor state"
-    - "Vendor zip"
-    - "Amount"
-    - "Unpaid amount"
-    - "Date"
-    - "Purpose"
-    - "Year"
-    - "Type"
-    - "In-kind descr"
-    - "In kind?"
-    - "Affected committee name"
-    - "Affected committee reg num"
 
 
 independent_expenditures:
@@ -395,11 +378,11 @@ independent_expenditures:
       Against: negative
 
   column_details:
-    - raw_name: "Spender name"
+    - raw_name: "Spender"
       type: str
       standard_name: donor--full_name
 
-    - raw_name: "Spender reg num" 
+    - raw_name: "Spender Reg Num"
       type: Int32
       standard_name: donor_id
 
@@ -415,13 +398,18 @@ independent_expenditures:
       type: str
       standard_name: affected_party--full_name
 
-    - raw_name: "Affected Comte Reg Num"
+    - raw_name: "Affected Cmte Reg Num"
       type: Int32
       standard_name: affected_party_id
 
     - raw_name: "For /Against"
       type: str
       standard_name: influence_type
+
+    # capitalized, unlike "Vendor state" in the expenditures file
+    - raw_name: "Vendor State"
+      type: str
+      standard_name: recipient--address--state
 
     - raw_name: "Date"
       type: str
@@ -452,26 +440,3 @@ independent_expenditures:
       type: str
       standard_name: affected_party--election_result--election--office_sought
     
-
-  column_order:
-    - Spender name
-    - Spender Reg Num
-    - Spender type
-    - Spender sub-type
-    - Affected Comte Name
-    - Affected Cmte Reg Num
-    - For /Against
-    - Year
-    - Date
-    - Type
-    - Amount
-    - Unpaid amount
-    - In kind?
-    - In kind descr
-    - Purpose
-    - Vendor name
-    - Vendor address 1
-    - Vendor address 2
-    - Vendor city
-    - Vendor State
-    - Vendor zip

@@ -16,9 +16,9 @@ legacy_download_contributions_or_receipts:
   path_pattern: "^LegacyDownloads/(\\d{4})/(\\d{4})_mi_cfr_(contributions|receipts).*\\.csv$"
   
   enum_mapper:
-    recipient--transactor_type:
+    recipient--transactor_type: &committee_transactor_type
       CAN: Organization
-      IND: Individual
+      IND: Organization  # Independent Committee
       GUB: Organization
       COU: Organization
       POL: Organization
@@ -26,9 +26,9 @@ legacy_download_contributions_or_receipts:
       DIS: Organization
       STA: Organization
 
-    recipient--transactor_type_specific:
+    recipient--transactor_type_specific: &committee_transactor_type_specific
       CAN: Candidate Committee
-      IND: Individual
+      IND: Committee
       GUB: Candidate Committee
       COU: Party
       POL: Committee
@@ -36,7 +36,7 @@ legacy_download_contributions_or_receipts:
       DIS: Committee
       STA: Party
 
-    donor--candidate--member--election_result--election--office_sought:
+    donor--candidate--member--election_result--election--office_sought: &office_sought
       STATE SENATE: State Senator
       STATE REPRESENTATIVE: State Representative
 
@@ -144,35 +144,74 @@ legacy_download_contributions_or_receipts:
       type: str
 
 legacy_download_expenditures:
-  inherits: legacy_download_contributions_or_receipts
+  # The filing committee pays (donor) and the payee in f_name/lname_or_org is
+  # paid (recipient). This form does not inherit the contribution form, whose
+  # mappings make the filer the recipient.
+  inherits: base
   table_name: Transaction
   path_pattern: "^LegacyDownloads/(\\d{4})/(\\d{4})_mi_cfr_expenditures.*\\.csv$"
+
+  enum_mapper:
+    donor--transactor_type: *committee_transactor_type
+    donor--transactor_type_specific: *committee_transactor_type_specific
+    recipient--candidate--member--election_result--election--office_sought: *office_sought
+
+  duplicate_columns:
+    donor--transactor_type:
+      - donor--transactor_type_specific
 
   overloaded_columns:
     "Unnamed: 28":
       pattern: '^(?P<generated_office>STATE SENATE|STATE REPRESENTATIVE)\s+(MI)?(?P<generated_district>\d{1,3})'
 
   filter:
-  # only including direct contributions now. Unclear what other types are and how vendor field is used.
+  # only including direct expenditures now. Unclear what other types are and how vendor field is used.
+  # Independent expenditures name the candidate they support in can_or_ballot,
+  # which is not the payee, so they need their own mapping before inclusion.
   # TODO: reached out to MDOS for clarification.
     "schedule_desc":
         - "DIRECT"
-    
 
   column_details:
-    - raw_name: "can_or_ballot"
-      type: str
-      standard_name: donor--candidate--member--full_name
+    - raw_name: "doc_seq_no"
+      type: Int32
+      description: "Document sequence number"
     - raw_name: "expenditure_type"
       type: str
     - raw_name: "gub_account_type"
       type: str
     - raw_name: "gub_elec_type"
       type: str
+    - raw_name: "page_no"
+      type: Int32
+      description: "Page number"
     - raw_name: "expense_id"
       type: Int32
     - raw_name: "detail_id"
       type: Int32
+    - raw_name: "doc_stmnt_year"
+      type: Int32
+      standard_name: reported_election_year
+      description: "Document statement year"
+    - raw_name: "doc_type_desc"
+      type: str
+      description: "Document type description"
+    - raw_name: "com_legal_name"
+      type: str
+      standard_name: donor--full_name
+      description: "Filing (paying) committee legal name"
+    - raw_name: "common_name"
+      type: str
+      standard_name: donor--name_preferred
+      description: "Filing committee common name"
+    - raw_name: "cfr_com_id"
+      type: str
+      standard_name: donor_id
+      description: "Filing committee ID"
+    - raw_name: "com_type"
+      type: str
+      standard_name: donor--transactor_type
+      description: "Filing committee type"
     - raw_name: "schedule_desc"
       type: str
     - raw_name: "exp_desc"
@@ -182,14 +221,43 @@ legacy_download_expenditures:
       standard_name: description
     - raw_name: "extra_desc"
       type: str
+    - raw_name: "f_name"
+      type: str
+      standard_name: recipient--first_name
+      description: "Payee first name"
+    - raw_name: "lname_or_org"
+      type: str
+      standard_name: recipient--full_name
+      description: "Payee last name or organization name"
+    - raw_name: "address"
+      type: str
+      standard_name: recipient--address--line_1
+    - raw_name: "city"
+      type: str
+      standard_name: recipient--address--city
+    - raw_name: "state"
+      type: str
+      standard_name: recipient--address--state
+    - raw_name: "zip"
+      type: str
+      standard_name: recipient--address--zipcode
     - raw_name: "exp_date"
       type: str
       date_format: "%m/%d/%Y"
       standard_name: date
+    - raw_name: "amount"
+      type: str
+      standard_name: amount
+      post_load_float: true
     - raw_name: "state_loc"
       type: str
     - raw_name: "supp_opp"
       type: str
+    - raw_name: "can_or_ballot"
+      type: str
+      # on direct contributions to a candidate committee, that committee's
+      # candidate
+      standard_name: recipient--candidate--member--full_name
     - raw_name: "Unnamed: 28"
       type: str
     - raw_name: "county"
@@ -212,10 +280,10 @@ legacy_download_expenditures:
       type: str
     - raw_name: "generated_office"
       type: str
-      standard_name: donor--candidate--member--election_result--election--office_sought
+      standard_name: recipient--candidate--member--election_result--election--office_sought
     - raw_name: "generated_district"
       type: Int32
-      standard_name: donor--candidate--member--election_result--election--district
+      standard_name: recipient--candidate--member--election_result--election--district
 
 
   column_order:
@@ -237,7 +305,7 @@ legacy_download_expenditures:
   - purpose
   - extra_desc
   - f_name
-  - l_name_or_org
+  - lname_or_org
   - address
   - city
   - state

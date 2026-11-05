@@ -154,6 +154,19 @@ class ConfigHandler:
         ]
 
     @property
+    def absolute_value_columns(self) -> list[str]:
+        """Standard names of columns whose values should be made non-negative
+
+        For sources that sign amounts by direction, once that direction is
+        applied through transaction_direction.
+        """
+        return [
+            col["standard_name"]
+            for col in self._column_details
+            if col.get("absolute_value", False)
+        ]
+
+    @property
     def raw_column_order(self) -> list[str]:
         """List of columns in order in raw file"""
         return self._column_order

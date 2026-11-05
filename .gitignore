@@ -139,6 +139,8 @@ venv.bak/
 # data files
 *.avro
 data/
+# test fixtures are synthetic and committed
+!tests/data/
 old/
 output/
 

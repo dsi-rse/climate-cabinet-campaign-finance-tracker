@@ -3,11 +3,24 @@
 import re
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
 from utils.constants import RAW_DATA_DIRECTORY
 from utils.standardize.config import ConfigHandler
+
+
+def _swap_party_prefix(column: str) -> str:
+    """Swap a leading donor/recipient prefix: donor_id -> recipient_id
+
+    Only the leading prefix names the party; later parts (for example
+    donor--employer--...) describe that party and are left as they are.
+    """
+    for prefix, other in (("donor", "recipient"), ("recipient", "donor")):
+        if column.startswith(prefix):
+            return other + column[len(prefix) :]
+    return column
 
 
 class DataReader:
@@ -263,6 +276,7 @@ class DataStandardizer:
         self.column_to_date_format = config_handler.column_to_date_format
         self.null_values = config_handler._null_values
         self.post_load_float_columns = config_handler.post_load_float_columns
+        self.absolute_value_columns = config_handler.absolute_value_columns
 
     def _standardize_enums(self, standard_schema_table: pd.DataFrame) -> pd.DataFrame:
         """Rename entity type columns"""
@@ -307,13 +321,25 @@ class DataStandardizer:
                 standard_schema_table.loc[~na_mask, temp_column] = pd.to_datetime(
                     unix_s_series, unit="s", errors="coerce"
                 ).dt.date
-            # Handle regular date formats
+            # Handle regular date formats. A list of formats is tried in order,
+            # each filling only the dates the earlier ones could not parse.
             else:
-                standard_schema_table.loc[~na_mask, temp_column] = pd.to_datetime(
-                    standard_schema_table.loc[~na_mask, date_column],
-                    format=date_format,
-                    errors="coerce",
-                ).dt.date
+                date_formats = (
+                    [date_format] if isinstance(date_format, str) else date_format
+                )
+                raw_dates = standard_schema_table.loc[~na_mask, date_column]
+                # Start from the first format's result rather than an empty
+                # series: an empty one defaults to nanosecond precision, and
+                # filling it with a date past 2262 (a typo'd year) overflows.
+                parsed_dates = None
+                for single_format in date_formats:
+                    parsed = pd.to_datetime(
+                        raw_dates, format=single_format, errors="coerce"
+                    )
+                    parsed_dates = (
+                        parsed if parsed_dates is None else parsed_dates.fillna(parsed)
+                    )
+                standard_schema_table.loc[~na_mask, temp_column] = parsed_dates.dt.date
 
             standard_schema_table = standard_schema_table.drop(columns=date_column)
             standard_schema_table = standard_schema_table.rename(
@@ -341,25 +367,28 @@ class DataStandardizer:
 
         In state config, if a raw column is mapped to transaction_direction and
         the enum mapper maps some values to 'reverse' those rows will switch
-        donor and recipient columns.
+        donor and recipient columns. Rows keep their original order, and the
+        transaction_direction column is dropped once it has been applied.
         """
         if "transaction_direction" not in standard_schema_table.columns:
             return standard_schema_table
         reverse_mask = standard_schema_table["transaction_direction"] == "reverse"
-        reverse_table = standard_schema_table.loc[reverse_mask, :]
-        new_reverse_table_columns = []
-        for column in standard_schema_table.columns:
-            if column.startswith("donor"):
-                new_reverse_table_columns.append(column.replace("donor", "recipient"))
-            elif column.startswith("recipient"):
-                new_reverse_table_columns.append(column.replace("recipient", "donor"))
-            else:
-                new_reverse_table_columns.append(column)
-        reverse_table.columns = new_reverse_table_columns
+        reverse_mask = reverse_mask.fillna(False).astype(bool)
+
+        reverse_table = standard_schema_table.loc[reverse_mask, :].rename(
+            columns=_swap_party_prefix
+        )
         standard_direction_table = pd.concat(
             [standard_schema_table.loc[~reverse_mask, :], reverse_table]
         )
-        return standard_direction_table
+        # restore the original row order by position (labels may repeat)
+        original_positions = np.concatenate(
+            [np.flatnonzero(~reverse_mask), np.flatnonzero(reverse_mask)]
+        )
+        standard_direction_table = standard_direction_table.iloc[
+            np.argsort(original_positions, kind="stable")
+        ]
+        return standard_direction_table.drop(columns="transaction_direction")
 
     def _standardize_organization_name(
         self, standard_schema_table: pd.DataFrame
@@ -386,14 +415,34 @@ class DataStandardizer:
     def _convert_strings_to_floats(
         self, standard_schema_table: pd.DataFrame
     ) -> pd.DataFrame:
-        """Convert strings to floats"""
+        """Convert strings to floats
+
+        Removes ',' and '$' and reads accounting-style negatives, so '($17.85)'
+        becomes -17.85.
+        """
         for column in self.post_load_float_columns:
             if column not in standard_schema_table.columns:
                 continue
-            standard_schema_table[column] = pd.to_numeric(
-                standard_schema_table[column].str.replace(",", "").str.replace("$", ""),
-                errors="coerce",
-            )
+            values = standard_schema_table[column].str.strip()
+            in_parentheses = values.str.match(r"^\(.*\)$").fillna(False).astype(bool)
+            values = values.str.replace(r"[,$()]", "", regex=True)
+            values = values.where(~in_parentheses, "-" + values)
+            standard_schema_table[column] = pd.to_numeric(values, errors="coerce")
+        return standard_schema_table
+
+    def _take_absolute_values(
+        self, standard_schema_table: pd.DataFrame
+    ) -> pd.DataFrame:
+        """Replace values with their magnitude in columns marked absolute_value
+
+        Used where a source signs amounts by direction (negative for money
+        leaving the filer) and that direction is already applied by swapping
+        donor and recipient.
+        """
+        for column in self.absolute_value_columns:
+            if column not in standard_schema_table.columns:
+                continue
+            standard_schema_table[column] = standard_schema_table[column].abs()
         return standard_schema_table
 
     def standardize_data(
@@ -427,6 +476,7 @@ class DataStandardizer:
         )
         standard_data_table = self._standardize_organization_name(standard_data_table)
         standard_data_table = self._convert_strings_to_floats(standard_data_table)
+        standard_data_table = self._take_absolute_values(standard_data_table)
         return standard_data_table
 
 

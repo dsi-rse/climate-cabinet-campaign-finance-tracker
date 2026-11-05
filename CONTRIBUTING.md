@@ -29,6 +29,10 @@ For each state, a configuration file in `src/utils/standardize/finance/config` s
 
 Please see [Configuration File Schema](#configuration-file-schema) for more details on how to fill out the configuration file. 
 
+### Test fixtures
+
+Add synthetic raw files for the state under `tests/data/standardize/raw/<state code>/`, written by a script next to them (see `make_pa_fixtures.py` and `make_az_mi_tx_fixtures.py`). Copy the real headers and value formats (dates, amounts, negatives) from the state's files, but use fake names, ids and amounts. Each file needs three rows, and every form needs at least one file: `tests/test_state_configs.py` checks that each file matches exactly one form and loads every row. Then add rows to `tests/test_state_golden_rows.py` that check, for each form, who paid whom, the amount, the date and the type. A row count alone won't catch a swapped donor and recipient or a date read from the wrong column.
+
 
 ### Configuration File Schema
 
@@ -56,8 +60,9 @@ Both first level keys have the same set of subkeys:
     - `raw_name`: the name of the column as it appears in the raw data
     - `type`: Pandas dtype of the column
     - `standard_name`: (optional) The name for the column based on our [standard naming rules](#standard-column-naming). Even if the standard name is the same as the raw name, this must be included. If no standard name is included, this column will be dropped during standardization. 
-    - `date_format`: (optional) Format of dates in the provided data according to [datetime strftime](https://docs.python.org/3/library/datetime.html#strftime-strptime-behavior). If unix time is used, use `%unix_ms` for unix ms.
-    - `post_load_float`: (optional) If the column should be interpreted as a float, but contains erroneous rows or ',' and '$' characters that pandas cannot handle, set the column as a string and set this value to True. 
+    - `date_format`: (optional) Format of dates in the provided data according to [datetime strftime](https://docs.python.org/3/library/datetime.html#strftime-strptime-behavior). If unix time is used, use `%unix_ms` for unix ms. If files write dates in more than one way, give a list of formats; each date is parsed with the first format that fits. Dates that fit no format become null, so check that the format matches the full value (for example `9/10/2003 0:00:00` needs `%m/%d/%Y %H:%M:%S`).
+    - `post_load_float`: (optional) If the column should be interpreted as a float, but contains erroneous rows or ',' and '$' characters that pandas cannot handle, set the column as a string and set this value to True. Accounting-style negatives such as `($17.85)` are read as negative.
+    - `absolute_value`: (optional) If True, negative values become positive after the transaction direction is applied. Use this when a source signs amounts by direction (negative for money leaving the filer) and `transaction_direction` already records that direction.
 - `column_order`: list of columns in the order they appear in the data format. If not provided, will default to the order in column_properties.
 - `duplicate_columns`:
     - map of standard column names to list of additional columns that should be copies of them
@@ -83,7 +88,8 @@ Both first level keys have the same set of subkeys:
 The state source standardization steps are to prepare the state code to be normalized and joined with other states. As part of this there is a specific naming pattern for columns. Standard table attributes are named in `table.yaml` under attributes. Provided source data, however, may not be normalized. These columns will be named with a `SPLIT` separator (`--`) between the name of the relation and the name of the attribute in the related column. This may be nested (i.e. if in a transaction table we are given a donor's address, this would be shown as `donor--address--line_1`). If a column is a repeated column (i.e. there are two amount columns to signify two transactions that share all other properties), it will end with `-\d` where \d is an integer. Valid column names include alphabetic characters and underscores.
 
 Special column names:
-- `transaction_direction`: this is used if a table doesn't have set 'donor' and 'recipient' columns and the direction of the transaction is specified by another column. If this exists this column should be given a standard name of 'transaction_direction' and an enum mapper that maps all values requiring a reversal mapped to 'reverse'
+- `transaction_direction`: this is used if a table doesn't have set 'donor' and 'recipient' columns and the direction of the transaction is specified by another column. If this exists this column should be given a standard name of 'transaction_direction' and an enum mapper that maps all values requiring a reversal mapped to 'reverse'. In reversed rows every column starting with `donor` is renamed to start with `recipient` and the reverse (so `donor_id` becomes `recipient_id` and `donor--address--city` becomes `recipient--address--city`); the column is dropped afterwards. Map the columns as they are for a transaction paid to the filer. If the direction comes from a column that is also mapped to something else, such as a transaction type code, copy it with `duplicate_columns` (see `az.yaml`).
+  - Check direction for every form that includes money the filer pays out. A form that lists the filer and a counterparty in fixed columns usually needs the filer mapped to `donor` for expenditures and to `recipient` for contributions; it can't inherit one from the other's `column_details` unchanged.
 - `reported_state`: this column is metadata automatically filled and propogated to all derived tables. 
 - `organization_name`: This will be mapped to `full_name` and the transactor type marked as organization.
 
