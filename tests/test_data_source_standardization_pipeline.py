@@ -320,6 +320,21 @@ class TestDataStandardizer:
             "NaT",
         ]
 
+    @pytest.mark.parametrize("date_format", ["%Y%m%d", ["%Y%m%d %H:%M:%S", "%Y%m%d"]])
+    def test_standardize_date_format_survives_far_future_typos(
+        self, mock_config_handler, date_format
+    ):
+        """A typo'd year past 2262 (as in PA's 2026 expense file) doesn't crash.
+
+        pandas 3 keeps the date (microsecond precision); pandas 2 makes it null.
+        """
+        standardizer = DataStandardizer(mock_config_handler)
+        standardizer.column_to_date_format = {"date": date_format}
+        table = pd.DataFrame({"date": ["20260330", "22660220"]})
+        result = standardizer._standardize_date_format(table)
+        assert str(result["date"].iloc[0]) == "2026-03-30"
+        assert str(result["date"].iloc[1]) in {"2266-02-20", "NaT"}
+
     def test_transaction_direction_swaps_only_reversed_rows(self, mock_config_handler):
         """Reversed rows swap donor and recipient; order and others are kept."""
         standardizer = DataStandardizer(mock_config_handler)

@@ -328,10 +328,16 @@ class DataStandardizer:
                     [date_format] if isinstance(date_format, str) else date_format
                 )
                 raw_dates = standard_schema_table.loc[~na_mask, date_column]
-                parsed_dates = pd.Series(pd.NaT, index=raw_dates.index)
+                # Start from the first format's result rather than an empty
+                # series: an empty one defaults to nanosecond precision, and
+                # filling it with a date past 2262 (a typo'd year) overflows.
+                parsed_dates = None
                 for single_format in date_formats:
-                    parsed_dates = parsed_dates.fillna(
-                        pd.to_datetime(raw_dates, format=single_format, errors="coerce")
+                    parsed = pd.to_datetime(
+                        raw_dates, format=single_format, errors="coerce"
+                    )
+                    parsed_dates = (
+                        parsed if parsed_dates is None else parsed_dates.fillna(parsed)
                     )
                 standard_schema_table.loc[~na_mask, temp_column] = parsed_dates.dt.date
 
