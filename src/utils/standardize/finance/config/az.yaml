@@ -175,8 +175,10 @@ base:
       "243": "expense"  # Pay a Bill - Independent Expenditure
       "244": "expense"  # Pay a Bill - Ballot Measure Expenditure
       "245": "loan"  # Loan to an Individual
+      "250": "loan"  # Loan to a Corporation/LLC
       "252": "other"  # Forgive a Loan to an Individual
       "266": "other"  # Receive Payment-Loan to Individual
+      "271": "other"  # Receive Payment-Loan to Corp/LLC
       "273": "expense"  # Pay a Bill - Expenses less than $250
       "274": "expense"  # Pay a Bill - Recall Independent Expenditure
       "281": "expense"  # In-Kind Contribution to Cand Comms
@@ -288,7 +290,10 @@ base:
     # donor. Keyed by TransactionTypeID, copied into transaction_direction by each
     # transaction form. In the full Access export (9.66M rows, 2025-04-15) every
     # type below except "Pay a Bill" has only negative amounts and every type not
-    # listed has only positive amounts.
+    # listed has only positive amounts. The Advanced Search downloads (881K rows,
+    # 2025-10-29) agree: a type is listed if its rows are expenses
+    # (TransactionTypeDispositionID 2) with positive amounts or income
+    # (disposition 1) with negative amounts, such as refunds the committee pays.
     transaction_direction:
       "31": "reverse"  # Operating Expense - Pay Cash/Check
       "32": "reverse"  # Operating Expense - Purchase on Terms/Credit
@@ -375,6 +380,7 @@ base:
       "243": "reverse"  # Pay a Bill - Independent Expenditure (recorded with a positive amount)
       "244": "reverse"  # Pay a Bill - Ballot Measure Expenditure (recorded with a positive amount)
       "245": "reverse"  # Loan to an Individual
+      "250": "reverse"  # Loan to a Corporation/LLC (not in the Access export; an expense in Advanced Search)
       "273": "reverse"  # Pay a Bill - Expenses less than $250 (recorded with a positive amount)
       "274": "reverse"  # Pay a Bill - Recall Independent Expenditure (recorded with a positive amount)
       "281": "reverse"  # In-Kind Contribution to Cand Comms
@@ -415,6 +421,9 @@ advanced_search_transactions:
     - raw_name: "Amount"
       type: Float32
       standard_name: amount
+      # refunds and loan repayments are negative (a refund the committee pays
+      # is a negative income); transaction_direction already applies that
+      absolute_value: true
 
     - raw_name: "TransactionName"
       type: str

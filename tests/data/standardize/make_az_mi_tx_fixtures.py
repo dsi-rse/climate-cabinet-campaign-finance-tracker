@@ -4,8 +4,10 @@ All names, ids, addresses and amounts are fake. Headers and value formats are
 copied from the files each state publishes (checked against the files in
 cft_test_data.zip and, for the Arizona Access export, the full 2025-04-15
 export):
-- AZ Advanced Search: dates as /Date(unix ms)/, positive amounts, and
-  TransactionTypeDispositionID 1 for income, 2 for expenses.
+- AZ Advanced Search: dates as /Date(unix ms)/ and
+  TransactionTypeDispositionID 1 for income, 2 for expenses. Amounts are
+  positive except refunds and loan repayments, which are negative entries on
+  their side (a refund the committee pays is a negative income).
 - AZ Access export: dates with a midnight time (9/10/2023 0:00:00) and amounts
   like $50.00, with money leaving the committee in parentheses ($745.00).
 - MI: the expenditure file names the payee column lname_or_org (receipts and
@@ -134,6 +136,46 @@ def az() -> None:
             "LastName": "Example Diner",
         },
     ]
+    # Refunds and loans, written as in the real files: a negative amount is
+    # money moving against its disposition (income or expense)
+    refunds_and_loans = [
+        {
+            **committee,
+            "TransactionDate": "/Date(1710054000000)/",  # 2024-03-10 UTC
+            "Amount": "-275.0",
+            "TransactionName": "Donor, Casey",
+            "TransactionType": "Refund Contribution from Individual",
+            "TransactionTypeDispositionID": "1",
+            "TransactionTypeId": "43",
+            "FirstName": "Casey",
+            "LastName": "Donor",
+        },
+        {
+            **committee,
+            "TransactionDate": "/Date(1710140400000)/",  # 2024-03-11 UTC
+            "Amount": "-42.5",
+            "TransactionName": "Example Sign Company",
+            "TransactionType": "Rebate or Refund from Operating Expense",
+            "TransactionTypeDispositionID": "2",
+            "TransactionTypeId": "22",
+            "LastName": "Example Sign Company",
+        },
+        {
+            **committee,
+            "TransactionDate": "/Date(1710226800000)/",  # 2024-03-12 UTC
+            "Amount": "7300.0",
+            "TransactionName": "Example Holdings LLC",
+            "TransactionType": "Loan to a Corporation/LLC",
+            "TransactionTypeDispositionID": "2",
+            "TransactionTypeId": "250",
+            "LastName": "Example Holdings LLC",
+        },
+    ]
+    write(
+        directory / "AdvancedSearch" / "BallotMeasures-1-1.csv",
+        AZ_ADVANCED_SEARCH_TRANSACTIONS,
+        refunds_and_loans,
+    )
     write(
         directory / "AdvancedSearch" / "Income-1-1.csv",
         AZ_ADVANCED_SEARCH_TRANSACTIONS,

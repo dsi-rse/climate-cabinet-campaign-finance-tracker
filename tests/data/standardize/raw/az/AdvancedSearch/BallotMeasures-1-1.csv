@@ -1,0 +1,4 @@
+TransactionDate,CommitteeID,CommitteeName,CommitteeGroupNumber,Amount,TransactionName,TransactionType,TransactionNameID,TransactionGroupNumber,TransactionTypeDispositionID,Occupation,Employer,City,State,ZipCode,EntityDescription,Memo,TransactionTypeId,FirstName,LastName,FilerName
+/Date(1710054000000)/,900001,Friends of Testperson,0,-275.0,"Donor, Casey",Refund Contribution from Individual,0,0,1,,,,,,,,43,Casey,Donor,"Testperson, Jane"
+/Date(1710140400000)/,900001,Friends of Testperson,0,-42.5,Example Sign Company,Rebate or Refund from Operating Expense,0,0,2,,,,,,,,22,,Example Sign Company,"Testperson, Jane"
+/Date(1710226800000)/,900001,Friends of Testperson,0,7300.0,Example Holdings LLC,Loan to a Corporation/LLC,0,0,2,,,,,,,,250,,Example Holdings LLC,"Testperson, Jane"

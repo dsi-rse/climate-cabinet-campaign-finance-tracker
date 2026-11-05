@@ -114,6 +114,53 @@ def test_az_payee_details_move_with_the_payee(az_advanced_search):
     )
 
 
+def test_az_refund_paid_by_the_committee_is_positive(az_advanced_search):
+    # written -275.0: a negative income
+    row = only_row(az_advanced_search, "amount", 275.0)
+    assert_row(
+        row,
+        {
+            "donor_id": "900001",
+            "recipient--first_name": "Casey",
+            "recipient--last_name": "Donor",
+            "date": "2024-03-10",
+            "transaction_type": "refund",
+        },
+    )
+
+
+def test_az_refund_received_by_the_committee_is_positive(az_advanced_search):
+    # written -42.5: a negative expense
+    row = only_row(az_advanced_search, "amount", 42.5)
+    assert_row(
+        row,
+        {
+            "donor--full_name": "Example Sign Company",
+            "recipient_id": "900001",
+            "date": "2024-03-11",
+            "transaction_type": "refund",
+        },
+    )
+
+
+def test_az_loan_to_a_business_is_paid_by_the_committee(az_advanced_search):
+    row = only_row(az_advanced_search, "amount", 7300.0)
+    assert_row(
+        row,
+        {
+            "donor_id": "900001",
+            "recipient--full_name": "Example Holdings LLC",
+            "date": "2024-03-12",
+            "transaction_type": "loan",
+        },
+    )
+
+
+def test_az_advanced_search_amounts_are_non_negative(az_advanced_search):
+    assert az_advanced_search["amount"].notna().all()
+    assert (az_advanced_search["amount"] >= 0).all()
+
+
 def test_az_direction_column_is_not_kept(az_advanced_search, az_access_export):
     assert "transaction_direction" not in az_advanced_search.columns
     assert "transaction_direction" not in az_access_export.columns
