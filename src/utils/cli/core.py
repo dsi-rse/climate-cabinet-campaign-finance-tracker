@@ -26,6 +26,8 @@ from utils.link.train import train_splink
 from utils.normalize import Normalizer
 from utils.standardize import standardize_state
 
+COERCED_VALUES_REPORT_NAME = "coerced_values.csv"
+
 
 def run_scrape(args: argparse.Namespace) -> int:
     """Command entry point for scraping raw data"""
@@ -41,16 +43,25 @@ def run_scrape(args: argparse.Namespace) -> int:
 
 def run_standardize(args: argparse.Namespace) -> int:
     """Command entry point for standardizing raw data"""
-    db = standardize_state(
+    db, coerced_values = standardize_state(
         args.state, args.start_year, args.end_year, args.input_directory
     )
     print(
         f"Standardizing data for {args.state} from {args.input_directory} to {args.output_directory}"
     )
+    state_output_directory = Path(args.output_directory) / args.state
     save_database(
         db,
-        Path(args.output_directory) / args.state,
+        state_output_directory,
         format=args.output_format,
+    )
+    # kept in a subfolder so later steps don't load the report as a table
+    report_path = state_output_directory / "reports" / COERCED_VALUES_REPORT_NAME
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    coerced_values.to_csv(report_path, index=False)
+    print(
+        f"{int(coerced_values['count'].sum())} raw values became null during"
+        f" standardization; distinct values and counts are in {report_path}"
     )
     return 0
 
