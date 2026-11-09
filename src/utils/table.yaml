@@ -152,7 +152,9 @@ Transaction:
       - negative
       - neutral
   types:
-    amount: Float32
+    # Float32 kept only 7 digits ($12,345,678.91 became $12,345,679). This is
+    # Float64 rounded to cents in pandas and DECIMAL(18,2) in DuckDB
+    amount: decimal(18,2)
     date: datetime64[ns]
     reported_election_year: Int32
     year: Int32
