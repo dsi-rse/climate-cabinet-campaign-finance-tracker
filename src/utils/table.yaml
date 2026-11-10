@@ -132,6 +132,14 @@ Transaction:
     - reported_state
     - affected_party_id
     - influence_type
+    # where the row came from: the state's own id for the row (only mapped
+    # where the state gives one that is unique per row: TX and the AZ Access
+    # export), the raw file relative to the state's data directory, and the
+    # row's position among the rows read from that file, starting at 1
+    # (PA rows that list up to three contributions give each the same row)
+    - source_identifier
+    - source_file
+    - source_row
   relations:
     - prefix: donor
       table: Transactor
@@ -159,6 +167,7 @@ Transaction:
     reported_election_year: Int32
     year: Int32
     day: Int32
+    source_row: Int64
 
 Election:
   required_attributes:

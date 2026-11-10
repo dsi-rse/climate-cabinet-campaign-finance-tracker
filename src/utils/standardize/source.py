@@ -2,13 +2,15 @@
 
 import logging
 import re
+from functools import cache
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-from utils.constants import RAW_DATA_DIRECTORY
+from utils.constants import DEFAULT_SCHEMA_PATH, RAW_DATA_DIRECTORY
+from utils.schema import DataSchema
 from utils.standardize.config import ConfigHandler
 
 logger = logging.getLogger(__name__)
@@ -35,6 +37,29 @@ _MAX_LISTED_HEADER_DIFFERENCES = 5
 _PARTIAL_ENUM_COLUMNS = ("transaction_direction",)
 COERCED_VALUE_COLUMNS = ["column", "step", "raw_value", "count"]
 COERCED_VALUE_REPORT_COLUMNS = ["state", "form", "file", *COERCED_VALUE_COLUMNS]
+
+# Columns that record where each row came from: the raw file's path relative to
+# the state's data directory, and the row's position among the rows read from
+# that file, starting at 1. They are filled for tables whose schema lists them.
+SOURCE_FILE_COLUMN = "source_file"
+SOURCE_ROW_COLUMN = "source_row"
+
+
+@cache
+def _table_attributes(table_name: str) -> frozenset[str]:
+    """Look up the attributes a table has in the default schema
+
+    Args:
+        table_name: Name of a table in the default schema, such as "Transaction".
+
+    Returns:
+        The table's attribute names, or an empty set if the schema has no such
+        table.
+    """
+    schema = DataSchema(DEFAULT_SCHEMA_PATH).schema
+    if table_name not in schema:
+        return frozenset()
+    return frozenset(schema[table_name].attributes)
 
 
 def _file_label(path: Path, state_data_directory: Path) -> str:
@@ -784,6 +809,52 @@ class DataSourceStandardizationPipeline:
             state=self.state_code, form=self.form_code, file=file_name
         )[COERCED_VALUE_REPORT_COLUMNS]
 
+    def _add_source_columns(
+        self,
+        standard_data_table: pd.DataFrame,
+        file_label: str,
+        raw_row_positions: pd.Index,
+    ) -> pd.DataFrame:
+        """Record which file and row each standardized row came from
+
+        Only tables whose schema lists SOURCE_FILE_COLUMN or SOURCE_ROW_COLUMN
+        get them. Row numbers come from the index pandas gives the rows it
+        reads (0, 1, 2, ...), which every standardization step keeps, so they
+        are only added when the reader returned an integer index. Lines that
+        read_csv skipped as malformed are not counted, so after one the row
+        number is lower than the line number.
+
+        Args:
+            standard_data_table: One file's rows after standardization.
+            file_label: The file's path relative to the state's data directory.
+            raw_row_positions: Index of the table the reader returned, before
+                standardization.
+
+        Returns:
+            standard_data_table with the source columns its schema lists.
+
+        Raises:
+            ValueError: if standardization added, dropped or renumbered rows,
+                so they can no longer be matched to their rows in the file.
+        """
+        attributes = _table_attributes(self.table_name)
+        if SOURCE_FILE_COLUMN in attributes:
+            standard_data_table[SOURCE_FILE_COLUMN] = file_label
+        if SOURCE_ROW_COLUMN in attributes and pd.api.types.is_integer_dtype(
+            raw_row_positions
+        ):
+            row_positions = standard_data_table.index
+            if not row_positions.sort_values().equals(raw_row_positions.sort_values()):
+                raise ValueError(
+                    f"{self.state_code} {self.form_code} {file_label}: rows were "
+                    "added, dropped or renumbered during standardization, so they "
+                    "can't be matched to their rows in the file"
+                )
+            standard_data_table[SOURCE_ROW_COLUMN] = pd.array(
+                row_positions.to_numpy() + 1, dtype="Int64"
+            )
+        return standard_data_table
+
     def _raw_data_file_paths(
         self, state_data_directory: Path | None = None
     ) -> list[Path]:
@@ -853,6 +924,10 @@ class DataSourceStandardizationPipeline:
             )
             if raw_data_table.empty:
                 continue
+            file_label = _file_label(data_path, state_data_directory)
+            # each row's position in the file, kept after blank and filtered
+            # rows are dropped
+            raw_row_positions = raw_data_table.index
 
             standard_schema_table = self.schema_transformer.standardize_schema(
                 raw_data_table
@@ -860,10 +935,13 @@ class DataSourceStandardizationPipeline:
             standard_data_table = self.data_standardizer.standardize_data(
                 standard_schema_table
             )
+            standard_data_table = self._add_source_columns(
+                standard_data_table, file_label, raw_row_positions
+            )
             standardized_tables.append(standard_data_table)
             file_coerced_values = self._collect_coerced_values(
                 getattr(self.data_standardizer, "coerced_values", None),
-                _file_label(data_path, state_data_directory),
+                file_label,
             )
             if file_coerced_values is not None:
                 coerced_value_tables.append(file_coerced_values)

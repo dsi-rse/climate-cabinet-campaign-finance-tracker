@@ -440,6 +440,9 @@ def mock_pipeline(
         pipeline = DataSourceStandardizationPipeline()
         pipeline.state_code = "NY"
         pipeline.form_code = "FORM1"
+        # not a schema table, so no source columns are added
+        mock_config_handler.table_name = "NotATable"
+        pipeline.config_handler = mock_config_handler
         pipeline.data_reader = mock_data_reader
         pipeline.schema_transformer = mock_schema_transformer
         pipeline.data_standardizer = mock_data_standardizer

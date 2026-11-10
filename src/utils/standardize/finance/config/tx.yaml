@@ -79,6 +79,7 @@ contributions:
 
     - raw_name: contributionInfoId
       type: str
+      standard_name: source_identifier
 
     - raw_name: contributionDt
       type: str
@@ -270,6 +271,7 @@ expenditures:
   column_details:
     - raw_name: expendInfoId
       type: str
+      standard_name: source_identifier
 
     - raw_name: expendDt
       type: str
