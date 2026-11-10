@@ -97,7 +97,7 @@ contributions:
       standard_name: recipient--transactor_type_specific
 
     - raw_name: Amount 
-      type: Float32
+      type: Float64
       standard_name: amount
 
     - raw_name: "Receipt date"
@@ -276,7 +276,7 @@ expenditures:
       standard_name: recipient--address--zipcode
 
     - raw_name: Amount 
-      type: Float32
+      type: Float64
       standard_name: amount
 
     - raw_name: Unpaid amount

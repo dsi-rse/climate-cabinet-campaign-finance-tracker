@@ -5,7 +5,7 @@ from pathlib import Path
 import duckdb
 
 from utils.constants import DEFAULT_SCHEMA_PATH
-from utils.schema import DataSchema
+from utils.schema import DataSchema, parse_decimal_type
 
 
 def _get_data_schema() -> DataSchema:
@@ -31,8 +31,12 @@ _TYPE_MAP: dict[str, str] = {
 def _duckdb_type(schema_type: str) -> str:
     """Convert a YAML schema type string to a DuckDB SQL type.
 
-    Unrecognised types default to VARCHAR.
+    "decimal(p,s)" becomes DECIMAL(p,s). Unrecognised types default to VARCHAR.
     """
+    decimal_type = parse_decimal_type(schema_type)
+    if decimal_type is not None:
+        precision, scale = decimal_type
+        return f"DECIMAL({precision},{scale})"
     return _TYPE_MAP.get(schema_type, "VARCHAR")
 
 

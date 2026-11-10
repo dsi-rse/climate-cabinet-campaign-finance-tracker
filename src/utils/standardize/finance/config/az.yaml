@@ -419,7 +419,7 @@ advanced_search_transactions:
       type: Int32
 
     - raw_name: "Amount"
-      type: Float32
+      type: Float64
       standard_name: amount
       # refunds and loan repayments are negative (a refund the committee pays
       # is a negative income); transaction_direction already applies that

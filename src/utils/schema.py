@@ -24,6 +24,34 @@ NORMALIZATION_LEVELS = [
 
 SPLIT = "--"
 
+# A schema type like "decimal(18,2)": a number with a fixed count of digits
+# (precision), of which `scale` are after the decimal point
+_DECIMAL_TYPE_PATTERN = re.compile(
+    r"^decimal\(\s*(?P<precision>\d+)\s*,\s*(?P<scale>\d+)\s*\)$", re.IGNORECASE
+)
+
+
+def parse_decimal_type(schema_type: str) -> tuple[int, int] | None:
+    """Read the precision and scale from a schema type like "decimal(18,2)"
+
+    Pandas has no simple decimal dtype, so clean holds these columns as Float64
+    rounded to `scale` places, and DuckDB stores them as DECIMAL(precision,
+    scale), which keeps cents exact in sums.
+
+    Args:
+        schema_type: Type string from a table's `types` in the schema YAML,
+            such as "decimal(18,2)" or "Float64". Case and spaces inside the
+            parentheses are ignored.
+
+    Returns:
+        (precision, scale) as integers if `schema_type` is a decimal type,
+        otherwise None.
+    """
+    match = _DECIMAL_TYPE_PATTERN.match(str(schema_type))
+    if match is None:
+        return None
+    return int(match.group("precision")), int(match.group("scale"))
+
 
 class TableSchema:
     """class representation of a single table schema"""

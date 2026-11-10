@@ -110,7 +110,7 @@ contributions:
       standard_name: date-1
 
     - raw_name: CONTAMT1
-      type: Float32
+      type: Float64
       standard_name: amount-1
 
     - raw_name: CONTDATE2
@@ -119,7 +119,7 @@ contributions:
       standard_name: date-2
 
     - raw_name: CONTAMT2
-      type: Float32
+      type: Float64
       standard_name: amount-2
 
     - raw_name: CONTDATE3
@@ -128,7 +128,7 @@ contributions:
       standard_name: date-3
 
     - raw_name: CONTAMT3
-      type: Float32
+      type: Float64
       standard_name: amount-3
 
     - raw_name: CONTDESC
@@ -396,7 +396,7 @@ expense:
       standard_name: date
 
     - raw_name: EXPAMT
-      type: Float32
+      type: Float64
       standard_name: amount
 
     - raw_name: EXPDESC
