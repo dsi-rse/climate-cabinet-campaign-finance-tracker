@@ -86,7 +86,7 @@ contributions:
       date_format: "%Y%m%d"
 
     - raw_name: contributionAmount
-      type: Float32
+      type: Float64
       standard_name: amount
 
     - raw_name: contributionDescr
@@ -277,7 +277,7 @@ expenditures:
       date_format: "%Y%m%d"
 
     - raw_name: expendAmount
-      type: Float32
+      type: Float64
       standard_name: amount
 
     - raw_name: expendDescr

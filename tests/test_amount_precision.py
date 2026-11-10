@@ -1,16 +1,30 @@
 """Amounts keep their cents from clean through to DuckDB"""
 
+import re
+import shutil
 from decimal import Decimal
+from pathlib import Path
 
 import pandas as pd
 import pytest
+import yaml
 from utils.clean.columns import clean_table_columns
 from utils.constants import DEFAULT_SCHEMA_PATH
 from utils.database import _duckdb_type, connect_duckdb, create_or_append_parquet_to_db
 from utils.schema import DataSchema, parse_decimal_type
+from utils.standardize.config import resolve_inheritance
+from utils.standardize.source import DataSourceStandardizationPipeline
 
 # Float32 stored this as 12345679.0
 LARGE_AMOUNT = 12345678.91
+# Float32 stored this as 150000.0625, which rounds to the wrong cent
+MID_AMOUNT = 150000.07
+
+CONFIG_DIRECTORY = (
+    Path(__file__).parents[1] / "src" / "utils" / "standardize" / "finance" / "config"
+)
+RAW_FIXTURE_DIRECTORY = Path(__file__).parent / "data" / "standardize" / "raw"
+AMOUNT_COLUMN = re.compile(r"^amount(-\d+)?$")
 
 
 @pytest.fixture
@@ -104,3 +118,44 @@ def test_duckdb_stores_amounts_as_exact_decimals(tmp_path, transaction_schema):
     ]
     # DECIMAL sums are exact (as floats, 0.1 + 0.2 is 0.30000000000000004)
     assert total == Decimal("12345661.36")
+
+
+def amount_column_types():
+    """(state, form, raw name, type) of every column standardized to an amount"""
+    for config_path in sorted(CONFIG_DIRECTORY.glob("*.yaml")):
+        with config_path.open() as f:
+            config = yaml.safe_load(f)
+        for form in config:
+            for column in resolve_inheritance(config, form).get("column_details", []):
+                if AMOUNT_COLUMN.match(column.get("standard_name", "")):
+                    yield config_path.stem, form, column["raw_name"], column["type"]
+
+
+def test_state_configs_do_not_read_amounts_as_float32():
+    # read_csv uses this type, so Float32 loses cents before clean can round
+    float32_amounts = [
+        column
+        for column in amount_column_types()
+        if str(column[3]).lower() == "float32"
+    ]
+    assert float32_amounts == []
+
+
+def test_large_amounts_keep_their_cents_through_standardize_and_clean(
+    tmp_path, transaction_schema
+):
+    state_directory = tmp_path / "tx"
+    shutil.copytree(RAW_FIXTURE_DIRECTORY / "tx", state_directory)
+    contributions = state_directory / "contribs_01.csv"
+    raw = pd.read_csv(contributions, dtype=str, keep_default_na=False)
+    raw.loc[:1, "contributionAmount"] = [str(LARGE_AMOUNT), str(MID_AMOUNT)]
+    raw.to_csv(contributions, index=False)
+
+    standardized = DataSourceStandardizationPipeline(
+        state_code="tx",
+        form_code="contributions",
+        config_file=CONFIG_DIRECTORY / "tx.yaml",
+    ).load_and_standardize_data_source(state_data_directory=state_directory)
+    cleaned = clean_table_columns(standardized, transaction_schema)
+
+    assert {LARGE_AMOUNT, MID_AMOUNT} <= set(cleaned["amount"].dropna())
