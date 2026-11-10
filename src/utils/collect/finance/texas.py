@@ -18,13 +18,19 @@ https://www.ethics.state.tx.us/search/cf/AdvancedSearch.php
 import argparse
 import zipfile
 from http import HTTPStatus
-from io import BytesIO
 from pathlib import Path
 
 import requests
 
+from utils.collect.downloads import (
+    add_extracted_files,
+    append_download_record,
+    archive_path,
+    save_response,
+)
 from utils.collect.state_collection_registry import register_special_state_collector
 from utils.constants import DATA_DIR
+from utils.provenance import utc_now
 
 
 @register_special_state_collector("tx")
@@ -35,7 +41,9 @@ def download_TX_data(output_directory: Path = None) -> None:
         output_directory: desired output location. Defaults to 'data/raw/tx'
     Modifies:
         Downloads and extracts the bulk CSV database from Texas Ethics Commission
-        to output_directory
+        to output_directory. The zip is kept in output_directory/_archives with
+        its retrieval time in the name (the commission rebuilds it daily), and
+        the download is logged in output_directory/_downloads.jsonl.
     """
     if output_directory is None:
         output_directory = DATA_DIR / "raw" / "tx"
@@ -59,29 +67,47 @@ def download_TX_data(output_directory: Path = None) -> None:
     try:
         print("Downloading Texas campaign finance CSV database...")
 
-        # Download the ZIP file
-        response = requests.get(zip_url, headers=headers, timeout=120)
-        if response.status_code != HTTPStatus.OK:
-            print(f"Failed to download data: {response.status_code} {response.reason}")
-            return
+        # Stream the ZIP file to disk; it is kept as the original download
+        retrieved_at = utc_now()
+        with requests.get(
+            zip_url, headers=headers, timeout=120, stream=True
+        ) as response:
+            if response.status_code != HTTPStatus.OK:
+                print(
+                    f"Failed to download data: {response.status_code} {response.reason}"
+                )
+                return
+            zip_path = archive_path(output_directory, zip_url, retrieved_at)
+            record = save_response(
+                response, zip_path, output_directory, retrieved_at=retrieved_at
+            )
 
-        print(f"Successfully downloaded ZIP file ({len(response.content):,} bytes)")
+        print(f"Successfully downloaded ZIP file ({record['size']:,} bytes)")
+        print(f"Kept the original at {zip_path}")
         print("Extracting CSV files...")
 
-        # Extract ZIP file directly from memory
-        with zipfile.ZipFile(BytesIO(response.content), "r") as zip_file:
-            # Get list of files in the ZIP
-            file_list = zip_file.namelist()
-            print(f"Found {len(file_list)} files in archive:")
+        extracted_files = []
+        try:
+            with zipfile.ZipFile(zip_path, "r") as zip_file:
+                # Get list of files in the ZIP
+                file_list = zip_file.namelist()
+                print(f"Found {len(file_list)} files in archive:")
 
-            extracted_files = []
-            for filename in file_list:
-                if filename.endswith("/"):  # Skip directories
-                    continue
+                for filename in file_list:
+                    if filename.endswith("/"):  # Skip directories
+                        continue
 
-                print(f"  Extracting: {filename}")
-                zip_file.extract(filename, output_directory)
-                extracted_files.append(filename)
+                    print(f"  Extracting: {filename}")
+                    zip_file.extract(filename, output_directory)
+                    extracted_files.append(filename)
+        finally:
+            # log the download even if extraction fails, since the zip is kept
+            add_extracted_files(
+                record,
+                [output_directory / filename for filename in extracted_files],
+                output_directory,
+            )
+            append_download_record(output_directory, record)
 
         print("Texas data download completed successfully!")
         print(f"Extracted {len(extracted_files)} files to {output_directory}")

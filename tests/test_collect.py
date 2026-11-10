@@ -1,7 +1,6 @@
 import importlib
 import io
 import pkgutil
-from types import SimpleNamespace
 from unittest import mock
 
 import pandas as pd
@@ -209,21 +208,21 @@ MICHIGAN_PAGE = """
     "first_year_result",
     [
         requests.Timeout("timed out"),
-        SimpleNamespace(status_code=200, reason="OK", content=b"not a 7z file"),
+        "bad-archive",
     ],
     ids=["network-error", "bad-archive"],
 )
-def test_michigan_failure_skips_only_that_year(tmp_path, first_year_result):
+def test_michigan_failure_skips_only_that_year(
+    tmp_path, first_year_result, fake_response
+):
     def fake_get(url, **kwargs):
         if "2001" in url:
             if isinstance(first_year_result, Exception):
                 raise first_year_result
-            return first_year_result
+            return fake_response(content=b"not a 7z file", url=url)
         if "2002" in url:
-            return SimpleNamespace(
-                status_code=200, reason="OK", content=make_7z("2002.txt", "data")
-            )
-        return SimpleNamespace(status_code=200, reason="OK", text=MICHIGAN_PAGE)
+            return fake_response(content=make_7z("2002.txt", "data"), url=url)
+        return fake_response(content=MICHIGAN_PAGE.encode())
 
     with mock.patch.object(michigan.requests, "get", side_effect=fake_get):
         michigan.download_MI_data(output_directory=tmp_path)

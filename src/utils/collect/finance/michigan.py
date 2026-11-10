@@ -25,7 +25,6 @@ Data notes:
 """
 
 import argparse
-import io
 import re
 from http import HTTPStatus
 from pathlib import Path
@@ -36,8 +35,15 @@ import requests
 from bs4 import BeautifulSoup
 from tqdm import tqdm
 
+from utils.collect.downloads import (
+    add_extracted_files,
+    append_download_record,
+    archive_path,
+    save_response,
+)
 from utils.collect.state_collection_registry import register_special_state_collector
 from utils.constants import DATA_DIR
+from utils.provenance import utc_now
 
 
 @register_special_state_collector("mi")
@@ -52,7 +58,9 @@ def download_MI_data(
         end_year: the last year to download data for
     Modifies:
         Saves extracted files from michigan.gov to output_directory with a separate
-        directory for each year's files.
+        directory for each year's files. Each year's 7z archive is kept in
+        output_directory/_archives with its retrieval time in the name, and each
+        download is logged in output_directory/_downloads.jsonl.
     """
     if output_directory is None:
         output_directory = DATA_DIR / "raw" / "mi"
@@ -62,6 +70,7 @@ def download_MI_data(
     # put everything in a "LegacyDownloads" to signify where from MI Secretary of State
     # the data came from. Since there other sources (currently being worked on by MI SOS)
     # the scraper may be expanded in the future.
+    state_directory = output_directory
     output_directory = output_directory / "LegacyDownloads"
 
     base_url = "https://www.michigan.gov"
@@ -137,25 +146,37 @@ def download_MI_data(
         ):
             print(f"Processing Michigan data for {year}...")
 
-            # Download the 7z file
+            # Stream the 7z file to disk; it is kept as the original download
+            retrieved_at = utc_now()
             try:
-                file_response = requests.get(url, timeout=60, headers=headers)
+                with requests.get(
+                    url, timeout=60, headers=headers, stream=True
+                ) as file_response:
+                    if file_response.status_code != HTTPStatus.OK:
+                        print(
+                            f"Michigan data from {year} returned "
+                            f"{file_response.reason}"
+                        )
+                        continue
+                    seven_zip_path = archive_path(state_directory, url, retrieved_at)
+                    record = save_response(
+                        file_response,
+                        seven_zip_path,
+                        state_directory,
+                        retrieved_at=retrieved_at,
+                    )
             except requests.RequestException as e:
                 print(f"Network error downloading Michigan data for {year}: {e}")
-                continue
-            if file_response.status_code != HTTPStatus.OK:
-                print(f"Michigan data from {year} returned {file_response.reason}")
                 continue
 
             # Create year directory
             year_directory = output_directory / year
             year_directory.mkdir(exist_ok=True, parents=True)
 
+            extracted_names = []
             try:
-                # Extract 7z archive directly from memory
-                with py7zr.SevenZipFile(
-                    io.BytesIO(file_response.content), mode="r"
-                ) as archive:
+                with py7zr.SevenZipFile(seven_zip_path, mode="r") as archive:
+                    extracted_names = archive.getnames()
                     archive.extractall(path=year_directory)
 
                 print(f"Successfully extracted Michigan data for {year}")
@@ -169,6 +190,14 @@ def download_MI_data(
             except py7zr.Bad7zFile as e:
                 print(f"Invalid 7z archive for Michigan data from {year}: {e}")
                 continue
+            finally:
+                # log the download even if extraction fails, since the 7z is kept
+                add_extracted_files(
+                    record,
+                    [year_directory / name for name in extracted_names],
+                    state_directory,
+                )
+                append_download_record(state_directory, record)
 
         print(f"Michigan data download completed. Files saved to {output_directory}")
 

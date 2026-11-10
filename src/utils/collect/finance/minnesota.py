@@ -15,8 +15,10 @@ from urllib.parse import urljoin
 import requests
 from bs4 import BeautifulSoup
 
+from utils.collect.downloads import append_download_record, save_response
 from utils.collect.state_collection_registry import register_special_state_collector
 from utils.constants import DATA_DIR
+from utils.provenance import utc_now
 
 
 def _extract_all_download_links(soup: BeautifulSoup, base_url: str) -> dict:
@@ -94,7 +96,9 @@ def download_MN_data(
     Args:
         output_directory: desired output location. Defaults to 'data/raw/MN'
     Modifies:
-        Saves raw files from cfb.mn.gov to output_directory
+        Saves raw files from cfb.mn.gov to output_directory and logs each
+        download in output_directory/_downloads.jsonl. The files are plain CSVs
+        that replace the previous download; the log keeps each version's hash.
     """
     if output_directory is None:
         output_directory = DATA_DIR / "raw" / "mn"
@@ -131,13 +135,16 @@ def download_MN_data(
         print(f"Downloading {filename}...")
 
         try:
-            response = requests.get(download_url, timeout=60)
-            if response.status_code != HTTPStatus.OK:
-                print(f"Failed to download {filename}: {response.reason}")
-                continue
-            file_path = output_directory / filename
-            with file_path.open("wb") as f:
-                f.write(response.content)
+            retrieved_at = utc_now()
+            with requests.get(download_url, timeout=60, stream=True) as response:
+                if response.status_code != HTTPStatus.OK:
+                    print(f"Failed to download {filename}: {response.reason}")
+                    continue
+                file_path = output_directory / filename
+                record = save_response(
+                    response, file_path, output_directory, retrieved_at=retrieved_at
+                )
+            append_download_record(output_directory, record)
 
             print(f"Successfully downloaded {filename} to {file_path}")
 
