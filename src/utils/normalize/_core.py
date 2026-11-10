@@ -348,7 +348,17 @@ class Normalizer:
             else:
                 new_entity_positions.append(position)
         new_entities = unsourced.iloc[new_entity_positions].reset_index(drop=True)
-        replace_null_ids_with_uuids(new_entities, id_column)
+        # the id is made from the entity's attributes and state, so the same
+        # entity gets the same id in every chunk and every run
+        content_columns = foreign_columns + [
+            column for column in ("reported_state",) if column in new_entities
+        ]
+        replace_null_ids_with_uuids(
+            new_entities,
+            id_column,
+            table_name=extracted_table_name,
+            content_columns=content_columns,
+        )
         for key, new_id in zip(
             self._row_keys(new_entities, foreign_columns), new_entities[id_column]
         ):

@@ -1,7 +1,14 @@
-"""Code for management and creation of unique identifiers"""
+"""Code for management and creation of unique identifiers
 
+Ids are uuid5s: the same inputs always give the same id, so re-running a step
+on the same data gives the same ids. A source id is hashed with its year, state
+and table. A row without a source id is hashed with its table and its values.
+"""
+
+import json
 import re
 import uuid
+from collections.abc import Iterable
 from pathlib import Path
 
 import pandas as pd
@@ -9,10 +16,19 @@ import pandas as pd
 from utils.constants import DEFAULT_SCHEMA_PATH
 from utils.schema import DataSchema, TableSchema
 
-# Precompiled regex for UUID4 validation
-UUID4_REGEX = re.compile(
-    r"^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$",
+# Matches any RFC 4122 uuid: the uuid5s made here, and uuid4s made by earlier
+# versions of the pipeline. Values that don't match are treated as raw ids.
+UUID_REGEX = re.compile(
+    r"^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$",
     re.IGNORECASE,
+)
+# kept for code that imported the old name
+UUID4_REGEX = UUID_REGEX
+
+# Namespace for every id the pipeline makes. Changing it changes every id.
+ID_NAMESPACE = uuid.uuid5(
+    uuid.NAMESPACE_URL,
+    "https://github.com/dsi-rse/climate-cabinet-campaign-finance-tracker/ids",
 )
 
 UUIDMapping = dict[tuple[str, int | None, str | None, str], str]
@@ -40,20 +56,104 @@ def normalize_id_to_string(value: int | float | str | None) -> str:
     return str(value)
 
 
-def replace_null_ids_with_uuids(table: pd.DataFrame, id_column: str) -> None:
-    """For each null value in id_column, replace it with a new UUID
+def _id_part(value: object) -> str | None:
+    """Write one value the same way however it was read
+
+    Args:
+        value: A value from a table or an id mapping key.
+
+    Returns:
+        None for a missing value. Otherwise the value as text, with whole
+        numbers written without a decimal point, so 222, 222.0 and "222" all
+        give "222".
+    """
+    if value is None or (not isinstance(value, str) and pd.isna(value)):
+        return None
+    return normalize_id_to_string(value)
+
+
+def deterministic_uuid(parts: Iterable[object]) -> str:
+    """Make a uuid5 from a sequence of values
+
+    Args:
+        parts: The values that identify the thing being given an id, in a
+            fixed order. Missing values and numbers are written as in _id_part.
+
+    Returns:
+        The uuid as a string. The same parts always give the same uuid.
+    """
+    name = json.dumps([_id_part(part) for part in parts])
+    return str(uuid.uuid5(ID_NAMESPACE, name))
+
+
+def _row_content_uuid(
+    table_name: str, columns: list[str], values: Iterable[object]
+) -> str:
+    """Make a uuid5 from a table name and one row's non-missing values
+
+    Args:
+        table_name: Name of the table the id identifies a row of.
+        columns: Names of the columns the values come from.
+        values: The row's values, in the same order as columns.
+
+    Returns:
+        The uuid as a string. Columns that are missing in the row don't change
+        it, so adding an empty column keeps the same ids.
+    """
+    pairs = sorted(
+        (column, part)
+        for column, value in zip(columns, values)
+        if (part := _id_part(value)) is not None
+    )
+    return deterministic_uuid([table_name, *(item for pair in pairs for item in pair)])
+
+
+def replace_null_ids_with_uuids(
+    table: pd.DataFrame,
+    id_column: str,
+    table_name: str = "",
+    content_columns: list[str] | None = None,
+) -> None:
+    """For each null value in id_column, fill in a uuid made from the row
+
+    Rows with the same table name and the same values in content_columns get
+    the same uuid, in any run and any chunk.
 
     Args:
         table: DataFrame where each row requires a UUID.
         id_column: Name of the column to be populated with UUIDs.
+        table_name: Name of the table the id identifies a row of. It is part of
+            the uuid, so rows of different tables with the same values get
+            different ids.
+        content_columns: Columns whose values identify the row. Defaults to
+            every column except id_column.
 
     Modifies:
         table: Assigns UUIDs to rows where `id_column` is missing.
     """
     missing_mask = table[id_column].isna()
+    if not missing_mask.any():
+        return
+    if content_columns is None:
+        content_columns = [column for column in table.columns if column != id_column]
+    rows = table.loc[missing_mask, content_columns].itertuples(index=False, name=None)
     table.loc[missing_mask, id_column] = [
-        str(uuid.uuid4()) for _ in range(missing_mask.sum())
+        _row_content_uuid(table_name, content_columns, row) for row in rows
     ]
+
+
+def source_id_uuid(key: tuple[str, object, object, str]) -> str:
+    """Make the uuid for a source id
+
+    Args:
+        key: (raw id, year, reported state, table name), as used in id
+            mappings.
+
+    Returns:
+        The uuid as a string. The same raw id, year, state and table always
+        give the same uuid, whether the raw id was read as 222, 222.0 or "222".
+    """
+    return deterministic_uuid(["source_id", *key])
 
 
 def map_ids_to_uuids(
@@ -118,7 +218,7 @@ def create_new_uuid_mapping(
     new_mappings = {}
     for _, row in table[
         (table[id_column].notna())
-        & (~table[id_column].astype("string").str.match(UUID4_REGEX, na=False))
+        & (~table[id_column].astype("string").str.match(UUID_REGEX, na=False))
     ].iterrows():
         key = (
             normalize_id_to_string(row[id_column]),
@@ -127,7 +227,7 @@ def create_new_uuid_mapping(
             table_name,
         )
         if key not in existing_mapping:
-            new_mappings[key] = str(uuid.uuid4())
+            new_mappings[key] = source_id_uuid(key)
 
     return new_mappings
 
@@ -140,7 +240,7 @@ def get_raw_ids_mask(table: pd.DataFrame, id_column: str) -> pd.Series:
         id_column: Name of the `id` column
     """
     # na=True because a null is *not* a raw id
-    not_raw_id_mask = table[id_column].astype("string").str.match(UUID4_REGEX, na=True)
+    not_raw_id_mask = table[id_column].astype("string").str.match(UUID_REGEX, na=True)
     # negate to get mask where all raw ids are true
     return ~not_raw_id_mask
 
@@ -195,7 +295,7 @@ def handle_id_column(
     if id_column not in table.columns:
         table[id_column] = None
 
-    replace_null_ids_with_uuids(table, id_column)
+    replace_null_ids_with_uuids(table, id_column, table_name=id_table_name)
     handle_existing_ids(table, id_table_name, id_mapping, id_column)
 
 

@@ -10,7 +10,7 @@ from utils.collect.election.minnesota import (
     standardize_results,
 )
 from utils.constants import DEFAULT_SCHEMA_PATH
-from utils.ids import UUID4_REGEX
+from utils.ids import UUID_REGEX
 from utils.normalize import Normalizer
 
 GENERAL_ROWS = [
@@ -112,7 +112,7 @@ def test_standardized_results_normalize(write_result_file):
     database = normalizer.normalize_database()
     election_results = database["ElectionResult"]
     elections = database["Election"]
-    assert election_results["id"].str.match(UUID4_REGEX).all()
+    assert election_results["id"].str.match(UUID_REGEX).all()
     assert len(elections) == len(raw_election_ids)
     assert election_results["election_id"].isin(elections["id"]).all()
     mapped_raw_ids = {key[0] for key in normalizer.id_mapping}
