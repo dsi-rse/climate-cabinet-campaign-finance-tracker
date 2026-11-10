@@ -142,6 +142,13 @@ Each step can be run as a command line tool by running `cft <step>` where `<step
 
 
 
+## Provenance
+
+Each step can be traced back to what it ran on and what code ran it.
+
+- **Run manifests.** Every `cft` step writes `_run_manifest.json` to its output directory (`<output>/<state>/` for steps that run per state). It records the step, start and finish times, whether it succeeded (and the error if not), the git commit and whether the working tree had uncommitted changes, the command line and parsed arguments, the Python and package versions, and the path, size and sha256 of every input and output file. A step's input hashes match the output hashes in the previous step's manifest when it read that step's files. The DuckDB database is listed by size only, since its bytes change whenever it is opened.
+- **Seeded linkage training.** The training sample and the random sampling used to estimate u are seeded (`TRAINING_SEED` in `utils/link/train.py`), so training on the same data gives the same model.
+
 ## Past Student Team Members
 Thanks to all of the students who have contributed to this project, including MPCS Practicum student Yue Xu; Data Science Clinic students Aïcha Camara, Alan Kagiri, Nicolas Posner, Yuzhou Wang, Adil Kassim, Nayna Pashilkar, Kaya Lee, Bhavya Pandey, and Yangge Xu; TAs Avery Schoen and Sarah Walker; and Research Assistants Steph Trello and Sarah Walker.
 

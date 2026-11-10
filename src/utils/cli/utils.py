@@ -8,6 +8,7 @@ from pathlib import Path
 
 from utils.collect.state_collection_registry import get_state_collectors
 from utils.constants import DATA_DIR, DEFAULT_SCHEMA_PATH
+from utils.provenance import run_step_with_manifest
 
 pipeline_step_details = {
     "collect": {
@@ -429,7 +430,8 @@ def route_pipeline_step(
 
     Args:
         args: Arguments to validate. Must contain a pipeline_step_func attribute
-            that should handle saving its outputs.
+            that should handle saving its outputs. Each run also writes a
+            _run_manifest.json to its output directory (see utils.provenance).
 
     Returns:
         int: 0 if successful
@@ -465,12 +467,12 @@ def route_pipeline_step(
         )
         with executor.batch():
             for job_args in job_args_list:
-                executor.submit(args.pipeline_step_func, job_args)
+                executor.submit(run_step_with_manifest, job_args)
     else:
         for job_args in job_args_list:
             if "state" in job_args:
                 print(f"Running pipeline step for {job_args.state}")
-            args.pipeline_step_func(job_args)
+            run_step_with_manifest(job_args)
     return 0
 
 

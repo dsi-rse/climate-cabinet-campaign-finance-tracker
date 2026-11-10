@@ -92,3 +92,19 @@ def test_training_sample_is_individuals_from_given_table(con):
     assert count == 50
     # can be called again on the same connection
     train.create_random_individuals_subset(con, "transactors", 10)
+
+
+def test_training_sample_is_the_same_each_run(con):
+    """The seeded sample picks the same individuals on every call
+
+    Args:
+        con: In-memory database with a table of fake transactors.
+    """
+
+    def sampled_ids():
+        train.create_random_individuals_subset(con, "transactors", 50)
+        return con.execute(
+            f"SELECT id FROM {train.TRAINING_SAMPLE_TABLE} ORDER BY id"
+        ).fetchall()
+
+    assert sampled_ids() == sampled_ids()
