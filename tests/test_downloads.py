@@ -8,6 +8,7 @@ from unittest import mock
 
 import py7zr
 import pytest
+import requests
 from utils.collect.downloads import (
     ARCHIVE_DIRECTORY,
     DOWNLOAD_MANIFEST_NAME,
@@ -17,6 +18,7 @@ from utils.collect.downloads import (
 )
 from utils.collect.election import minnesota as mn_election
 from utils.collect.finance import michigan, pennsylvania, texas
+from utils.collect.finance import minnesota as mn_finance
 from utils.standardize.source import DataSourceStandardizationPipeline
 
 CONFIG_DIRECTORY = (
@@ -248,4 +250,129 @@ def test_minnesota_election_file_is_logged(tmp_path, fake_response):
 
     (record,) = read_download_records(tmp_path)
     assert record["path"] == "20221108/stsenate.txt"
+    assert record["sha256"] == sha256(body)
+
+
+def interrupted_response(fake_response, first_chunk: bytes):
+    """Build a response whose body fails after its first chunk
+
+    Args:
+        fake_response: Builds a requests.Response (fixture).
+        first_chunk: Bytes sent before the connection drops.
+
+    Returns:
+        The response.
+    """
+    response = fake_response(url=TX_URL)
+
+    def iter_content(chunk_size=1):
+        yield first_chunk
+        raise requests.ConnectionError("connection dropped")
+
+    response.iter_content = iter_content
+    return response
+
+
+def test_interrupted_download_leaves_no_partial_file(tmp_path, fake_response):
+    """A download that fails partway keeps the earlier file and no .part file
+
+    Args:
+        tmp_path: Temporary directory for this test (pytest fixture).
+        fake_response: Builds a requests.Response (fixture).
+    """
+    path = tmp_path / "file.csv"
+    path.write_bytes(b"earlier download")
+    with pytest.raises(requests.ConnectionError):
+        save_response(interrupted_response(fake_response, b"new"), path, tmp_path)
+
+    assert path.read_bytes() == b"earlier download"
+    assert not list(tmp_path.rglob("*.part"))
+
+
+def test_redirected_download_records_the_requested_url(tmp_path, fake_response):
+    """url is the address asked for and final_url the one redirected to
+
+    Args:
+        tmp_path: Temporary directory for this test (pytest fixture).
+        fake_response: Builds a requests.Response (fixture).
+    """
+    requested = "https://example.com/data/2024.zip"
+    final = "https://cdn.example.com/data/2024.zip"
+    redirect = fake_response(status_code=302, url=requested)
+    redirect.request = requests.Request("GET", requested).prepare()
+    response = fake_response(content=b"zip", url=final)
+    response.request = requests.Request("GET", final).prepare()
+    response.history = [redirect]
+
+    record = save_response(response, tmp_path / "2024.zip", tmp_path)
+    assert record["url"] == requested
+    assert record["final_url"] == final
+
+
+def test_texas_logs_a_download_whose_zip_is_bad(tmp_path, fake_response):
+    """A zip that can't be opened is still kept and logged, with no files
+
+    Args:
+        tmp_path: Temporary directory for this test (pytest fixture).
+        fake_response: Builds a requests.Response (fixture).
+    """
+    run_tx_collector(tmp_path, b"not a zip", fake_response, "2026-11-10T06:00:00+00:00")
+
+    (record,) = read_download_records(tmp_path)
+    assert record["sha256"] == sha256(b"not a zip")
+    assert record["extracted"] == []
+    assert (tmp_path / record["path"]).read_bytes() == b"not a zip"
+
+
+def test_pennsylvania_logs_a_download_whose_zip_is_bad(tmp_path, fake_response):
+    """A bad zip is logged before the error stops the collector
+
+    Args:
+        tmp_path: Temporary directory for this test (pytest fixture).
+        fake_response: Builds a requests.Response (fixture).
+    """
+
+    def fake_get(url, **kwargs):
+        return fake_response(content=b"not a zip", url=url)
+
+    with (
+        mock.patch.object(pennsylvania.requests, "get", side_effect=fake_get),
+        pytest.raises(zipfile.BadZipFile),
+    ):
+        pennsylvania.download_PA_data(2024, 2024, output_directory=tmp_path)
+
+    (record,) = read_download_records(tmp_path)
+    assert record["sha256"] == sha256(b"not a zip")
+    assert record["extracted"] == []
+
+
+MN_FINANCE_PAGE = b"""
+<html><body>
+<h1>Itemized contributions received of over $200</h1>
+<table><tr><td>All</td><td>2015-2026</td><td><a href="/files/contribs.csv">CSV</a></td></tr></table>
+</body></html>
+"""
+
+
+def test_minnesota_finance_files_are_logged(tmp_path, fake_response):
+    """Each Minnesota finance file is saved and logged with its hash
+
+    Args:
+        tmp_path: Temporary directory for this test (pytest fixture).
+        fake_response: Builds a requests.Response (fixture).
+    """
+    body = b"Recipient reg num,Amount\n1234,250\n"
+
+    def fake_get(url, **kwargs):
+        if url.endswith("contribs.csv"):
+            return fake_response(content=body, url=url)
+        return fake_response(content=MN_FINANCE_PAGE, url=url)
+
+    with mock.patch.object(mn_finance.requests, "get", side_effect=fake_get):
+        mn_finance.download_MN_data(output_directory=tmp_path)
+
+    assert (tmp_path / "contributions_all.csv").read_bytes() == body
+    (record,) = read_download_records(tmp_path)
+    assert record["url"].endswith("/files/contribs.csv")
+    assert record["path"] == "contributions_all.csv"
     assert record["sha256"] == sha256(body)

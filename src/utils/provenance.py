@@ -12,17 +12,29 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import logging
 import platform
 import shutil
 import subprocess
 import sys
+import time
 import traceback
 from collections.abc import Callable, Iterable
 from datetime import datetime, timezone
 from importlib import metadata
 from pathlib import Path
 
+logger = logging.getLogger(__name__)
+
 RUN_MANIFEST_NAME = "_run_manifest.json"
+# Files collect keeps next to the raw data (see utils.collect.downloads). They
+# describe downloads rather than being data a step reads, and the archives
+# are already hashed in the download log, so manifests leave them out.
+DOWNLOAD_MANIFEST_NAME = "_downloads.jsonl"
+ARCHIVE_DIRECTORY = "_archives"
+PARTIAL_DOWNLOAD_SUFFIX = ".part"
+# Normalize reads this from its output directory, so it is one of its inputs
+ID_MAPPING_NAME = "id_mapping.tsv"
 # Packages whose versions can change the pipeline's output
 TRACKED_PACKAGES = (
     "climate-cabinet-campaign-finance",
@@ -35,9 +47,13 @@ TRACKED_PACKAGES = (
     "usaddress",
     "nameparser",
 )
-# Arguments that hold functions rather than settings
-_UNRECORDED_ARGUMENTS = ("func", "pipeline_step_func")
+# Arguments that hold functions rather than settings, or that are recorded
+# separately (the command line)
+_UNRECORDED_ARGUMENTS = ("func", "pipeline_step_func", "command_line")
 _HASH_CHUNK_BYTES = 1024 * 1024
+# Filesystems store modification times with limited precision, so a file
+# written in the run's first moments may look slightly older than its start
+_MODIFIED_TIME_TOLERANCE_SECONDS = 2.0
 
 
 def utc_now() -> str:
@@ -86,10 +102,32 @@ def describe_file(path: Path, relative_to: Path | None = None) -> dict:
     return {"path": label, "size": path.stat().st_size, "sha256": sha256_file(path)}
 
 
+def _is_data_file(path: Path, directory: Path, excluded_names: set[str]) -> bool:
+    """True for a file a manifest should list
+
+    Args:
+        path: File inside directory.
+        directory: Directory being described.
+        excluded_names: File names to leave out.
+
+    Returns:
+        False for excluded names, the download log, partial downloads and
+        anything inside an archive directory.
+    """
+    if path.name in excluded_names or path.name == DOWNLOAD_MANIFEST_NAME:
+        return False
+    if path.name.endswith(PARTIAL_DOWNLOAD_SUFFIX):
+        return False
+    return ARCHIVE_DIRECTORY not in path.relative_to(directory).parts[:-1]
+
+
 def describe_directory(
     directory: Path | None, exclude: Iterable[str] = (RUN_MANIFEST_NAME,)
 ) -> list[dict]:
-    """Describe every file in a directory and its subdirectories
+    """Describe every data file in a directory and its subdirectories
+
+    Downloaded archives, the download log and partial downloads are left out:
+    the download log already records the archives' hashes.
 
     Args:
         directory: Directory to describe. A missing directory has no files.
@@ -106,7 +144,7 @@ def describe_directory(
     files = sorted(
         path
         for path in directory.rglob("*")
-        if path.is_file() and path.name not in excluded
+        if path.is_file() and _is_data_file(path, directory, excluded)
     )
     return [describe_file(path, relative_to=directory) for path in files]
 
@@ -238,18 +276,28 @@ def describe_inputs(args: argparse.Namespace) -> list[dict]:
 
     Returns:
         The files in the step's input directory (per state if the step runs
-        per state), and for link, the model it loads when not training.
+        per state), the id mapping normalize reads from its output directory
+        if there is one, and for link, the model it loads when not training.
     """
     inputs = describe_directory(
         _state_directory(getattr(args, "input_directory", None), args)
     )
+    output_directory = _state_directory(getattr(args, "output_directory", None), args)
+    if output_directory is not None:
+        inputs += _describe_optional_file(output_directory / ID_MAPPING_NAME)
     if not getattr(args, "train", False):
         inputs += _describe_optional_file(getattr(args, "model_path", None))
     return inputs
 
 
-def describe_outputs(args: argparse.Namespace) -> list[dict]:
-    """Describe the files a step wrote, after it runs
+def describe_outputs(
+    args: argparse.Namespace, started_at: float | None = None
+) -> list[dict]:
+    """Describe the files in a step's output directory, after it runs
+
+    The output directory can hold files from earlier runs (for example a
+    table this run had no rows for), so each entry says whether the file was
+    written during this run.
 
     The DuckDB database is listed by path and size only: it can be very large,
     and its bytes change whenever it is opened, so a hash would not identify
@@ -257,16 +305,20 @@ def describe_outputs(args: argparse.Namespace) -> list[dict]:
 
     Args:
         args: Parsed arguments for one step.
+        started_at: When the step started, as time.time(). If given, each
+            entry gets "written_by_run": whether the file was modified since.
 
     Returns:
         The files in the step's output directory (per state if the step runs
         per state), and for link, the model it trained and the database.
     """
-    outputs = describe_directory(
-        _state_directory(getattr(args, "output_directory", None), args)
-    )
+    output_directory = _state_directory(getattr(args, "output_directory", None), args)
+    outputs = describe_directory(output_directory)
+    paths = [output_directory / output["path"] for output in outputs]
     if getattr(args, "train", False):
-        outputs += _describe_optional_file(getattr(args, "model_path", None))
+        model_entries = _describe_optional_file(getattr(args, "model_path", None))
+        outputs += model_entries
+        paths += [Path(args.model_path)] * len(model_entries)
     database_path = getattr(args, "database_path", None)
     if database_path is not None and Path(database_path).is_file():
         outputs.append(
@@ -276,6 +328,11 @@ def describe_outputs(args: argparse.Namespace) -> list[dict]:
                 "sha256": None,
             }
         )
+        paths.append(Path(database_path))
+    if started_at is not None:
+        cutoff = started_at - _MODIFIED_TIME_TOLERANCE_SECONDS
+        for output, path in zip(outputs, paths, strict=True):
+            output["written_by_run"] = path.stat().st_mtime >= cutoff
     return outputs
 
 
@@ -290,37 +347,82 @@ def write_run_manifest(path: Path, manifest: dict) -> None:
     path.write_text(json.dumps(manifest, indent=2) + "\n")
 
 
+def _record_safely(manifest: dict, key: str, describe: Callable[[], object]) -> None:
+    """Fill in one manifest entry, without letting bookkeeping stop a step
+
+    Args:
+        manifest: Manifest being built.
+        key: Entry to fill in.
+        describe: Function that returns the entry's value.
+
+    Modifies:
+        manifest: Sets manifest[key], or on an error leaves it as it was and
+            adds the error to manifest["manifest_errors"].
+    """
+    try:
+        manifest[key] = describe()
+    except Exception as error:  # provenance must never stop a step
+        message = f"{key}: {type(error).__name__}: {error}"
+        logger.warning("Could not record %s in the run manifest", message)
+        manifest.setdefault("manifest_errors", []).append(message)
+
+
+def _write_safely(path: Path | None, manifest: dict) -> None:
+    """Write a manifest, logging rather than raising if it can't be written
+
+    Args:
+        path: Manifest file, or None if the step has no output directory.
+        manifest: Contents to write.
+    """
+    if path is None:
+        return
+    try:
+        write_run_manifest(path, manifest)
+    except Exception as error:  # provenance must never stop a step
+        logger.warning("Could not write the run manifest %s: %s", path, error)
+
+
 def run_step_with_manifest(args: argparse.Namespace) -> int | None:
     """Run one pipeline step and write its run manifest
 
-    The manifest is written even if the step fails, with "status": "failed"
-    and the error, and then the error is raised again.
+    The manifest is written with "status": "running" before the step starts,
+    so a run that is killed (for example at a SLURM time limit) shows as
+    "running" instead of leaving the previous run's manifest in place. It is
+    written again when the step finishes, with "succeeded", or with "failed"
+    and the error, after which the error is raised again. Errors while
+    describing files or writing the manifest are logged and recorded in
+    "manifest_errors"; they never stop the step or hide its own error.
 
     Args:
         args: Parsed arguments for one step, with `pipeline_step_func` set to
-            the function that runs it.
+            the function that runs it. `command_line` is the command that
+            started the run (route_pipeline_step sets it, since on SLURM
+            sys.argv is the job runner's); it defaults to sys.argv.
 
     Returns:
         Whatever the step function returns.
     """
     step_function: Callable[[argparse.Namespace], int | None] = args.pipeline_step_func
+    started_at = time.time()
     manifest = {
         "step": getattr(args, "command", step_function.__name__),
         "state": getattr(args, "state", None),
         "status": "running",
         "started_at": utc_now(),
         "finished_at": None,
-        "git": git_state(),
-        "command_line": sys.argv,
-        "arguments": recordable_arguments(args),
+        "command_line": list(getattr(args, "command_line", None) or sys.argv),
         "python": platform.python_version(),
         "platform": platform.platform(),
-        "packages": package_versions(),
-        "inputs": describe_inputs(args),
+        "inputs": [],
         "outputs": [],
         "error": None,
     }
+    _record_safely(manifest, "git", git_state)
+    _record_safely(manifest, "arguments", lambda: recordable_arguments(args))
+    _record_safely(manifest, "packages", package_versions)
+    _record_safely(manifest, "inputs", lambda: describe_inputs(args))
     manifest_path = run_manifest_path(args)
+    _write_safely(manifest_path, manifest)
     try:
         result = step_function(args)
     except BaseException as error:
@@ -334,6 +436,5 @@ def run_step_with_manifest(args: argparse.Namespace) -> int | None:
         return result
     finally:
         manifest["finished_at"] = utc_now()
-        manifest["outputs"] = describe_outputs(args)
-        if manifest_path is not None:
-            write_run_manifest(manifest_path, manifest)
+        _record_safely(manifest, "outputs", lambda: describe_outputs(args, started_at))
+        _write_safely(manifest_path, manifest)

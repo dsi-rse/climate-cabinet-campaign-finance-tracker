@@ -1,8 +1,9 @@
 """Code for management and creation of unique identifiers
 
 Ids are uuid5s: the same inputs always give the same id, so re-running a step
-on the same data gives the same ids. A source id is hashed with its year, state
-and table. A row without a source id is hashed with its table and its values.
+on the same data, with the same chunking and input format, gives the same ids.
+A source id is hashed with its year, state and table. A row without a source id
+is hashed with its table and its values, as read.
 """
 
 import json
@@ -25,6 +26,8 @@ UUID_REGEX = re.compile(
 # kept for code that imported the old name
 UUID4_REGEX = UUID_REGEX
 
+# Every id the pipeline makes is a uuid of this version
+ID_UUID_VERSION = 5
 # Namespace for every id the pipeline makes. Changing it changes every id.
 ID_NAMESPACE = uuid.uuid5(
     uuid.NAMESPACE_URL,
@@ -105,7 +108,38 @@ def _row_content_uuid(
         for column, value in zip(columns, values)
         if (part := _id_part(value)) is not None
     )
-    return deterministic_uuid([table_name, *(item for pair in pairs for item in pair)])
+    return _uuid_from_text_parts(
+        [table_name, *(item for pair in pairs for item in pair)]
+    )
+
+
+def _uuid_from_text_parts(parts: list[str]) -> str:
+    """Make the uuid deterministic_uuid gives for parts that are already text
+
+    Args:
+        parts: Values already written by _id_part (none missing).
+
+    Returns:
+        The uuid as a string, equal to deterministic_uuid(parts).
+    """
+    return str(uuid.uuid5(ID_NAMESPACE, json.dumps(parts)))
+
+
+def _column_id_parts(column: pd.Series) -> list[str | None]:
+    """Write each value of a column as _id_part does
+
+    Args:
+        column: One column of a table.
+
+    Returns:
+        One entry per row: None for a missing value, otherwise its text.
+    """
+    if pd.api.types.is_string_dtype(column.dtype) and not pd.api.types.is_object_dtype(
+        column.dtype
+    ):
+        # every value is already text or missing, so _id_part would keep it
+        return column.astype(object).where(column.notna(), None).tolist()
+    return [_id_part(value) for value in column]
 
 
 def replace_null_ids_with_uuids(
@@ -117,7 +151,9 @@ def replace_null_ids_with_uuids(
     """For each null value in id_column, fill in a uuid made from the row
 
     Rows with the same table name and the same values in content_columns get
-    the same uuid, in any run and any chunk.
+    the same uuid in any run. Values are hashed as read, so a value read with
+    a different type (for example a zip code read as a number from a csv
+    chunk) gives a different uuid.
 
     Args:
         table: DataFrame where each row requires a UUID.
@@ -136,10 +172,23 @@ def replace_null_ids_with_uuids(
         return
     if content_columns is None:
         content_columns = [column for column in table.columns if column != id_column]
-    rows = table.loc[missing_mask, content_columns].itertuples(index=False, name=None)
-    table.loc[missing_mask, id_column] = [
-        _row_content_uuid(table_name, content_columns, row) for row in rows
-    ]
+    # the same as _row_content_uuid for each row, but each column is written
+    # once and the columns are sorted once (sorting the (column, value) pairs
+    # of a row orders them by column, since a row has one value per column)
+    missing_rows = table.loc[missing_mask]
+    columns = sorted(content_columns)
+    column_parts = [_column_id_parts(missing_rows[column]) for column in columns]
+    uuids = []
+    for row_parts in (
+        zip(*column_parts, strict=True) if columns else [()] * len(missing_rows)
+    ):
+        parts = [table_name]
+        for column, part in zip(columns, row_parts):
+            if part is not None:
+                parts.append(column)
+                parts.append(part)
+        uuids.append(_uuid_from_text_parts(parts))
+    table.loc[missing_mask, id_column] = uuids
 
 
 def source_id_uuid(key: tuple[str, object, object, str]) -> str:
@@ -335,11 +384,36 @@ def load_id_mapping(file_path: Path) -> UUIDMapping:
 
     Returns:
         Dictionary mapping tuples to UUIDs
+
+    Raises:
+        ValueError: if the file holds ids that are not uuid5s. Those were made
+            before ids were repeatable, and reusing them would mix old and new
+            ids in one output.
     """
     if not file_path.exists():
         return {}
 
-    id_mapping_df = pd.read_csv(file_path, sep="\t")
+    # raw ids are saved already written by normalize_id_to_string, so read
+    # them back as text to match the keys new rows are looked up by
+    id_mapping_df = pd.read_csv(
+        file_path,
+        sep="\t",
+        dtype={"raw_id": str, "reported_state": str, "table_name": str, "uuid": str},
+        keep_default_na=False,
+        na_values={"year": [""], "reported_state": [""]},
+    )
+    old_ids = [
+        value
+        for value in id_mapping_df["uuid"]
+        if uuid.UUID(value).version != ID_UUID_VERSION
+    ]
+    if old_ids:
+        raise ValueError(
+            f"{file_path} holds {len(old_ids)} ids that are not uuid5s (for"
+            f" example {old_ids[0]}). It was written before ids were repeatable."
+            " Delete it and the outputs next to it, then re-run normalize, clean"
+            " and link (with --overwrite) from data standardized by this version."
+        )
 
     # Convert DataFrame back to mapping format
     id_mapping = {}

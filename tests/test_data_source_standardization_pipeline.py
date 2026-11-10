@@ -198,7 +198,11 @@ class TestDataReader:
         result = reader.read_tabular_data(Path("contributions.csv"))
 
         mock_read_csv.assert_called_once_with(
-            "contributions.csv", dtype=mock_config_handler.dtype_dict, sep=","
+            "contributions.csv",
+            dtype=mock_config_handler.dtype_dict,
+            sep=",",
+            # blank lines are read so later rows keep their record numbers
+            skip_blank_lines=False,
         )
         assert not result.empty
         assert list(result.columns) == [
@@ -230,7 +234,11 @@ class TestDataReader:
         )
 
         mock_read_csv.assert_called_once_with(
-            "contributions.csv", dtype=mock_config_handler.dtype_dict, sep=","
+            "contributions.csv",
+            dtype=mock_config_handler.dtype_dict,
+            sep=",",
+            # blank lines are read so later rows keep their record numbers
+            skip_blank_lines=False,
         )
         assert not result.empty
 
@@ -623,6 +631,7 @@ class TestDataReaderYearFiltering:
             "2021/contributions.csv",
             dtype=mock_config_handler_with_year_filter.dtype_dict,
             sep=",",
+            skip_blank_lines=False,
         )
         # Should contain years 2021-2022 due to column filtering
         assert list(result["EYEAR"]) == [2021, 2022]

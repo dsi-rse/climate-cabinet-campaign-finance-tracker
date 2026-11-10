@@ -349,7 +349,10 @@ class Normalizer:
                 new_entity_positions.append(position)
         new_entities = unsourced.iloc[new_entity_positions].reset_index(drop=True)
         # the id is made from the entity's attributes and state, so the same
-        # entity gets the same id in every chunk and every run
+        # entity gets the same id in every run and in each chunk it is new in.
+        # An entity matched to a sourced one above takes that id instead, but
+        # only when the sourced entity is in this chunk, so ids can change
+        # with the chunk size.
         content_columns = foreign_columns + [
             column for column in ("reported_state",) if column in new_entities
         ]

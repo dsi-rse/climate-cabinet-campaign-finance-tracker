@@ -133,6 +133,81 @@ def test_source_row_counts_dropped_rows(tx_directory):
     ]
 
 
+def test_source_row_counts_malformed_and_empty_lines(tx_directory):
+    """Lines read_csv skips still count, so later rows keep their line numbers
+
+    TX reads with on_bad_lines: skip. A malformed line (one field too many)
+    and an empty line come before the last two rows; without counting them,
+    every later row would point at an earlier line of the file.
+
+    Args:
+        tx_directory: Editable copy of the Texas fixtures.
+    """
+    path = tx_directory / "contribs_01.csv"
+    lines = path.read_text().splitlines()
+    malformed = lines[1] + ",EXTRA"
+    raw_lines = [lines[0], lines[1], malformed, "", *lines[2:]]
+    path.write_text("\n".join(raw_lines) + "\n")
+
+    table = standardize("tx", "contributions", tx_directory)
+    rows = table.loc[table["source_file"] == "contribs_01.csv"]
+    assert sorted(zip(rows["source_identifier"], rows["source_row"])) == [
+        ("700", 1),
+        ("701", 4),
+        ("702", 5),
+    ]
+    # with a header, the raw line is line source_row + 1
+    id_column = lines[0].split(",").index("contributionInfoId")
+    for identifier, row in zip(rows["source_identifier"], rows["source_row"]):
+        assert raw_lines[row].split(",")[id_column] == identifier
+
+
+def test_source_row_skipped_lines_in_warn_mode(tx_directory, monkeypatch, caplog):
+    """on_bad_lines: warn counts skipped lines the same way and logs them
+
+    Args:
+        tx_directory: Editable copy of the Texas fixtures.
+        monkeypatch: pytest fixture to switch the form to warn mode.
+        caplog: pytest fixture holding log records.
+    """
+    path = tx_directory / "contribs_01.csv"
+    lines = path.read_text().splitlines()
+    raw_lines = [lines[0], lines[1], lines[2] + ",EXTRA", *lines[2:]]
+    path.write_text("\n".join(raw_lines) + "\n")
+    pipeline = DataSourceStandardizationPipeline(
+        state_code="tx",
+        form_code="contributions",
+        config_file=CONFIG_DIRECTORY / "tx.yaml",
+    )
+    monkeypatch.setitem(pipeline.data_reader.read_csv_params, "on_bad_lines", "warn")
+
+    table = pipeline.load_and_standardize_data_source(state_data_directory=tx_directory)
+    rows = table.loc[table["source_file"] == "contribs_01.csv"]
+    assert sorted(zip(rows["source_identifier"], rows["source_row"])) == [
+        ("700", 1),
+        ("701", 3),
+        ("702", 4),
+    ]
+    assert "skipped 1 malformed lines (first: line 3)" in caplog.text
+
+
+def test_renumbered_rows_raise():
+    """A step that drops, adds or renumbers rows stops standardize"""
+    pipeline = DataSourceStandardizationPipeline(
+        state_code="tx",
+        form_code="contributions",
+        config_file=CONFIG_DIRECTORY / "tx.yaml",
+    )
+    raw_positions = pd.RangeIndex(3)
+    renumbered = pd.DataFrame({"amount": [1.0, 2.0]})
+    with pytest.raises(ValueError, match="renumbered"):
+        pipeline._add_source_columns(renumbered, "f.csv", raw_positions)
+
+    reordered = pd.DataFrame({"amount": [1.0, 2.0, 3.0]}, index=[2, 0, 1])
+    result = pipeline._add_source_columns(reordered, "f.csv", raw_positions)
+    assert result["source_row"].tolist() == [3, 1, 2]
+
+
 def test_transactor_tables_get_no_source_columns():
     """Only tables whose schema lists the source columns get them"""
     table = standardize("tx", "filers", RAW_FIXTURE_DIRECTORY / "tx")
@@ -179,3 +254,39 @@ def test_source_columns_reach_duckdb(tmp_path):
         "source_file": "VARCHAR",
         "source_row": "BIGINT",
     }
+
+
+@pytest.mark.parametrize("old_file_first", [True, False])
+def test_older_files_without_source_columns_still_load(tmp_path, old_file_first):
+    """A cleaned file written before the source columns loads with them empty
+
+    Before, the missing column failed the load, and link printed the error
+    and carried on without that state's transactions.
+
+    Args:
+        tmp_path: Temporary directory for this test (pytest fixture).
+        old_file_first: Whether the older file creates the table.
+    """
+    transactions = standardize("tx", "contributions", RAW_FIXTURE_DIRECTORY / "tx")
+    normalized = Normalizer(
+        {"Transaction": transactions.copy()}, DEFAULT_SCHEMA_PATH
+    ).normalize_database()
+    cleaned = clean_data(normalized, DEFAULT_SCHEMA_PATH)["Transaction"]
+    (tmp_path / "new").mkdir()
+    (tmp_path / "old").mkdir()
+    new_path = tmp_path / "new" / "Transaction.parquet"
+    old_path = tmp_path / "old" / "Transaction.parquet"
+    cleaned.to_parquet(new_path)
+    cleaned.drop(columns=SOURCE_COLUMNS).to_parquet(old_path)
+
+    con = connect_duckdb(tmp_path / "test.duckdb")
+    try:
+        for path in [old_path, new_path] if old_file_first else [new_path, old_path]:
+            create_or_append_parquet_to_db(con, path)
+        counts = con.execute(
+            "SELECT count(*), count(source_row) FROM Transaction"
+        ).fetchone()
+    finally:
+        con.close()
+
+    assert counts == (2 * len(cleaned), len(cleaned))

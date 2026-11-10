@@ -108,3 +108,57 @@ def test_training_sample_is_the_same_each_run(con):
         ).fetchall()
 
     assert sampled_ids() == sampled_ids()
+
+
+@pytest.mark.parametrize("threads", [1, 4])
+def test_training_sample_is_the_same_after_a_rebuild(con, threads):
+    """A rebuilt table with its rows in another order gives the same sample
+
+    The link step rebuilds the database from parquet files, and DuckDB's
+    seeded sampling depends on the order rows are scanned in, so the sample
+    must not.
+
+    Args:
+        con: In-memory database with a table of fake transactors.
+        threads: DuckDB threads for the rebuilt database.
+    """
+    train.create_random_individuals_subset(con, "transactors", 50)
+    original = con.execute(
+        f"SELECT id FROM {train.TRAINING_SAMPLE_TABLE} ORDER BY id"
+    ).fetchall()
+
+    shuffled = (
+        con.execute("SELECT * FROM transactors").df().sample(frac=1, random_state=1)
+    )
+    rebuilt = duckdb.connect()
+    rebuilt.execute(f"SET threads = {threads}")
+    rebuilt.register("df", shuffled)
+    rebuilt.execute("CREATE TABLE transactors AS SELECT * FROM df")
+    train.create_random_individuals_subset(rebuilt, "transactors", 50)
+    assert (
+        rebuilt.execute(
+            f"SELECT id FROM {train.TRAINING_SAMPLE_TABLE} ORDER BY id"
+        ).fetchall()
+        == original
+    )
+
+
+def test_u_estimation_is_seeded(con, tmp_path):
+    """estimate_u_using_random_sampling gets TRAINING_SEED
+
+    Args:
+        con: In-memory database with a table of fake transactors.
+        tmp_path: Temporary directory for the model files.
+    """
+    from splink.internals.linker_components.training import LinkerTraining
+
+    original = LinkerTraining.estimate_u_using_random_sampling
+    seeds = []
+
+    def spy(self, *args, **kwargs):
+        seeds.append(kwargs.get("seed"))
+        return original(self, *args, **kwargs)
+
+    with patch.object(LinkerTraining, "estimate_u_using_random_sampling", spy):
+        train.train_splink(con, "transactors", tmp_path / "model.json")
+    assert seeds == [train.TRAINING_SEED]

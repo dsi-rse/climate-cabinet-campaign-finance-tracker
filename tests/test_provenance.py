@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import os
 import shutil
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from utils.cli.core import main
 from utils.provenance import (
     RUN_MANIFEST_NAME,
     git_state,
+    run_manifest_path,
     run_step_with_manifest,
 )
 
@@ -175,3 +177,153 @@ def test_cli_steps_chain_through_their_manifests(tmp_path):
         standardized["outputs"]
     )
     assert "Transaction.parquet" in hashes_by_path(normalized["outputs"])
+
+
+def test_manifest_says_running_while_the_step_runs(step_args):
+    """The manifest is written before the step, so a killed run shows "running"
+
+    Args:
+        step_args: Arguments for a fake per-state step.
+    """
+    seen = {}
+
+    def look_at_manifest(args):
+        seen.update(read_manifest(run_manifest_path(args)))
+        return 0
+
+    step_args.pipeline_step_func = look_at_manifest
+    run_step_with_manifest(step_args)
+    assert seen["status"] == "running"
+    assert seen["finished_at"] is None
+    assert hashes_by_path(seen["inputs"]) == {
+        "Transaction.csv": hashlib.sha256(b"amount\n1.00\n").hexdigest()
+    }
+
+
+def test_command_line_comes_from_the_arguments(step_args, monkeypatch):
+    """On SLURM sys.argv is the job runner's, so the saved command line is used
+
+    Args:
+        step_args: Arguments for a fake per-state step.
+        monkeypatch: pytest fixture to replace sys.argv.
+    """
+    monkeypatch.setattr("sys.argv", ["python", "-m", "submitit.core._submit"])
+    step_args.command_line = ["cft", "normalize", "--states", "tx"]
+    step_args.pipeline_step_func = write_output
+    run_step_with_manifest(step_args)
+
+    manifest = read_manifest(step_args.output_directory / "tx" / RUN_MANIFEST_NAME)
+    assert manifest["command_line"] == ["cft", "normalize", "--states", "tx"]
+    assert "command_line" not in manifest["arguments"]
+
+
+def test_bookkeeping_errors_do_not_stop_or_hide_the_step(step_args, monkeypatch):
+    """A file that can't be hashed is recorded, and the step's own error wins
+
+    Args:
+        step_args: Arguments for a fake per-state step.
+        monkeypatch: pytest fixture to break file hashing.
+    """
+
+    def broken_hash(path):
+        raise PermissionError(f"can't read {path}")
+
+    monkeypatch.setattr("utils.provenance.sha256_file", broken_hash)
+    step_args.pipeline_step_func = fail
+    with pytest.raises(ValueError, match="bad input"):
+        run_step_with_manifest(step_args)
+
+    manifest = read_manifest(step_args.output_directory / "tx" / RUN_MANIFEST_NAME)
+    assert manifest["status"] == "failed"
+    assert any("PermissionError" in error for error in manifest["manifest_errors"])
+
+    step_args.pipeline_step_func = write_output
+    assert run_step_with_manifest(step_args) == 0
+
+
+def test_manifest_leaves_out_archives_and_marks_stale_outputs(step_args):
+    """Archives, the download log and partial downloads are not listed, and
+    outputs left from an earlier run are marked as not written by this one
+
+    Args:
+        step_args: Arguments for a fake per-state step.
+    """
+    state_input = step_args.input_directory / "tx"
+    (state_input / "_archives").mkdir()
+    (state_input / "_archives" / "TEC_CF_CSV.20261110T060000Z.zip").write_bytes(b"z")
+    (state_input / "_downloads.jsonl").write_text("{}\n")
+    (state_input / "big.zip.part").write_bytes(b"p")
+    stale = step_args.output_directory / "tx" / "Transaction.parquet"
+    stale.parent.mkdir(parents=True)
+    stale.write_bytes(b"old")
+    os.utime(stale, (1_000_000_000, 1_000_000_000))
+
+    step_args.pipeline_step_func = write_output
+    run_step_with_manifest(step_args)
+
+    manifest = read_manifest(step_args.output_directory / "tx" / RUN_MANIFEST_NAME)
+    assert [file["path"] for file in manifest["inputs"]] == ["Transaction.csv"]
+    written = {file["path"]: file["written_by_run"] for file in manifest["outputs"]}
+    assert written == {"Transaction.csv": True, "Transaction.parquet": False}
+
+
+def test_normalize_inputs_include_the_id_mapping(step_args):
+    """The id mapping normalize reads from its output directory is an input
+
+    Args:
+        step_args: Arguments for a fake per-state step.
+    """
+    mapping = step_args.output_directory / "tx" / "id_mapping.tsv"
+    mapping.parent.mkdir(parents=True)
+    mapping.write_text("raw_id\tyear\treported_state\ttable_name\tuuid\n")
+    step_args.pipeline_step_func = write_output
+    run_step_with_manifest(step_args)
+
+    manifest = read_manifest(step_args.output_directory / "tx" / RUN_MANIFEST_NAME)
+    input_paths = [file["path"] for file in manifest["inputs"]]
+    assert input_paths == ["Transaction.csv", mapping.as_posix()]
+
+
+@pytest.mark.parametrize("train", [True, False])
+def test_link_lists_the_model_and_the_database_by_size(tmp_path, train):
+    """Link's model is an output when training and an input otherwise, and the
+    database is listed by size with no hash
+
+    Args:
+        tmp_path: Temporary directory for this test (pytest fixture).
+        train: Whether the link run trains the model.
+    """
+    (tmp_path / "cleaned" / "tx").mkdir(parents=True)
+    (tmp_path / "cleaned" / "tx" / "Transactor.parquet").write_bytes(b"t")
+    model_path = tmp_path / "model.json"
+    database_path = tmp_path / "linked.duckdb"
+
+    def link(args):
+        if args.train:
+            model_path.write_text("{}")
+        database_path.write_bytes(b"d" * 10)
+        return 0
+
+    if not train:
+        model_path.write_text("{}")
+    args = argparse.Namespace(
+        command="link",
+        input_directory=tmp_path / "cleaned",
+        output_directory=tmp_path / "linked",
+        model_path=model_path,
+        database_path=database_path,
+        train=train,
+        pipeline_step_func=link,
+    )
+    run_step_with_manifest(args)
+
+    manifest = read_manifest(tmp_path / "linked" / RUN_MANIFEST_NAME)
+    model_hash = hashlib.sha256(b"{}").hexdigest()
+    inputs, outputs = hashes_by_path(manifest["inputs"]), manifest["outputs"]
+    assert inputs.get(model_path.as_posix()) == (None if train else model_hash)
+    assert hashes_by_path(outputs).get(model_path.as_posix()) == (
+        model_hash if train else None
+    )
+    (database,) = (file for file in outputs if file["path"] == database_path.as_posix())
+    assert database["size"] == 10
+    assert database["sha256"] is None

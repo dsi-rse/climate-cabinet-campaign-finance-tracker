@@ -190,8 +190,8 @@ def test_normalize_gives_the_same_ids_in_any_chunk(tx_transactions):
 def test_saved_id_mapping_gives_the_same_ids(tmp_path, tx_transactions):
     """Re-running with the saved id mapping gives the ids of a fresh run
 
-    The saved mapping reads raw ids back as numbers, which used to miss the
-    lookup and create new ids.
+    The saved mapping used to read raw ids back as numbers, which missed the
+    lookup and created new ids.
 
     Args:
         tmp_path: Temporary directory for this test (pytest fixture).
@@ -204,5 +204,60 @@ def test_saved_id_mapping_gives_the_same_ids(tmp_path, tx_transactions):
     mapping_path = tmp_path / "id_mapping.tsv"
     save_id_mapping(normalizer.id_mapping, mapping_path)
 
-    rerun = ids_by_source_row(normalize(tx_transactions, load_id_mapping(mapping_path)))
+    rerun_normalizer = Normalizer(
+        {"Transaction": tx_transactions.copy()},
+        DEFAULT_SCHEMA_PATH,
+        load_id_mapping(mapping_path),
+    )
+    rerun = ids_by_source_row(rerun_normalizer.normalize_database())
     assert rerun == fresh
+
+    # raw ids are read back as text, so every saved id is found and saving
+    # again writes the same file instead of adding rows for the same ids
+    first_save = mapping_path.read_bytes()
+    save_id_mapping(rerun_normalizer.id_mapping, mapping_path)
+    assert mapping_path.read_bytes() == first_save
+
+
+def test_id_mapping_with_uuid4_ids_is_refused(tmp_path):
+    """A mapping saved before ids were uuid5s would mix old and new ids
+
+    Args:
+        tmp_path: Temporary directory for this test (pytest fixture).
+    """
+    mapping_path = tmp_path / "id_mapping.tsv"
+    save_id_mapping(
+        {("222", None, "tx", "Transactor"): str(uuid.uuid4())}, mapping_path
+    )
+    with pytest.raises(ValueError, match="not uuid5s"):
+        load_id_mapping(mapping_path)
+
+
+def test_raw_ids_keep_leading_zeros_when_loaded(tmp_path):
+    """Raw ids such as 00090001 are read back as written, not as numbers
+
+    Args:
+        tmp_path: Temporary directory for this test (pytest fixture).
+    """
+    key = ("00090001", None, "tx", "Transactor")
+    mapping_path = tmp_path / "id_mapping.tsv"
+    save_id_mapping({key: source_id_uuid(key)}, mapping_path)
+    assert load_id_mapping(mapping_path) == {key: source_id_uuid(key)}
+
+
+def test_same_entity_in_another_state_gets_another_id(tx_transactions):
+    """The same donor attributes reported by two states are two donors
+
+    Normalize runs once per state, so the state must be part of a donor's id
+    for the two states' donors to stay apart when their tables are combined.
+
+    Args:
+        tx_transactions: Standardized Texas contributions.
+    """
+    other_state = tx_transactions.copy()
+    other_state["reported_state"] = "pa"
+    texas_ids = ids_by_source_row(normalize(tx_transactions))
+    other_ids = ids_by_source_row(normalize(other_state))
+    assert texas_ids.keys() == other_ids.keys()
+    for key, (donor, _) in texas_ids.items():
+        assert other_ids[key][0] != donor

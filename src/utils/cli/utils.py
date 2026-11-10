@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from copy import deepcopy
 from pathlib import Path
 
@@ -408,8 +409,12 @@ def validate_args(
         args.output_directory.mkdir(parents=True, exist_ok=True)
     if args.states is None:
         if "input_directory" in args:
+            # each state has a folder; files such as a step's _run_manifest.json
+            # and folders starting with _ or . are not states
             args.states = [
-                state_dir.stem for state_dir in args.input_directory.iterdir()
+                state_dir.name
+                for state_dir in args.input_directory.iterdir()
+                if state_dir.is_dir() and not state_dir.name.startswith(("_", "."))
             ]
             print(
                 f"States not provided, using all states in input directory: {args.states}"
@@ -441,6 +446,10 @@ def route_pipeline_step(
         input_directory_name=args.input_directory_name,
         output_directory_name=args.output_directory_name,
     )
+
+    # Record the command now: on SLURM, sys.argv inside a job is the job
+    # runner's, not the cft command (see utils.provenance)
+    args.command_line = list(sys.argv)
 
     # Most steps run once per state. Steps like link operate on the whole
     # database and run once, regardless of how many states are requested.

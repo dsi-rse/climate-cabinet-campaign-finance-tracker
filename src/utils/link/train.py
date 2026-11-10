@@ -30,16 +30,20 @@ def create_random_individuals_subset(
     """Create a temp table that is a random subset of individuals in table_name
 
     Individuals are filtered before sampling so the subset has `size` rows
-    whenever the table has at least that many individuals. The sample is
-    seeded with TRAINING_SEED, so the same table gives the same sample.
+    whenever the table has at least that many individuals. Rows are picked by
+    a hash of their id and TRAINING_SEED (ties broken by a hash of the whole
+    row), not by DuckDB's sampling: a seeded sample depends on the order rows
+    are scanned in, which changes when the database is rebuilt or read with
+    more threads. Ids are repeatable, so the same data gives the same sample.
     """
     con.execute(f"""
         CREATE OR REPLACE TEMP TABLE {TRAINING_SAMPLE_TABLE} AS
-        SELECT *
+        SELECT individuals.*
         FROM (
             SELECT * FROM {table_name} WHERE transactor_type = 'Individual'
-        )
-        USING SAMPLE reservoir({size} ROWS) REPEATABLE ({TRAINING_SEED})
+        ) AS individuals
+        ORDER BY hash(individuals.id, {TRAINING_SEED}), hash(individuals)
+        LIMIT {size}
     """)
 
 

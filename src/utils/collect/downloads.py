@@ -21,10 +21,24 @@ from urllib.parse import unquote, urlparse
 
 import requests
 
-from utils.provenance import describe_file, utc_now
+from utils.provenance import (
+    ARCHIVE_DIRECTORY,
+    DOWNLOAD_MANIFEST_NAME,
+    PARTIAL_DOWNLOAD_SUFFIX,
+    describe_file,
+    utc_now,
+)
 
-DOWNLOAD_MANIFEST_NAME = "_downloads.jsonl"
-ARCHIVE_DIRECTORY = "_archives"
+__all__ = [
+    "ARCHIVE_DIRECTORY",
+    "DOWNLOAD_MANIFEST_NAME",
+    "add_extracted_files",
+    "append_download_record",
+    "archive_path",
+    "read_download_records",
+    "save_response",
+]
+
 _CHUNK_BYTES = 1024 * 1024
 
 
@@ -64,7 +78,9 @@ def save_response(
     """Stream a response body to a file and describe the download
 
     The body is written to a temporary file next to path and renamed when
-    complete, so an interrupted download never leaves a partial file at path.
+    complete, so an interrupted download never leaves a partial file at path
+    or replaces an earlier file there. If the download fails, the temporary
+    file is deleted and the error is raised again.
 
     Args:
         response: Response from requests, ideally made with stream=True so the
@@ -75,24 +91,33 @@ def save_response(
         retrieved_at: When the request was made. Defaults to now.
 
     Returns:
-        A download record: url, final_url (after redirects), retrieved_at,
-        status, etag, last_modified, content_type, content_length (as the
-        server reported it), path, size and sha256 (of the bytes written), and
-        an empty "extracted" list for add_extracted_files.
+        A download record: url (as requested), final_url (after redirects),
+        retrieved_at, status, etag, last_modified, content_type,
+        content_length (as the server reported it), path, size and sha256 (of
+        the bytes written), and an empty "extracted" list for
+        add_extracted_files.
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    partial_path = path.with_name(path.name + ".part")
+    partial_path = path.with_name(path.name + PARTIAL_DOWNLOAD_SUFFIX)
     digest = hashlib.sha256()
     size = 0
-    with partial_path.open("wb") as file:
-        for chunk in response.iter_content(chunk_size=_CHUNK_BYTES):
-            file.write(chunk)
-            digest.update(chunk)
-            size += len(chunk)
-    partial_path.replace(path)
+    try:
+        with partial_path.open("wb") as file:
+            for chunk in response.iter_content(chunk_size=_CHUNK_BYTES):
+                file.write(chunk)
+                digest.update(chunk)
+                size += len(chunk)
+        partial_path.replace(path)
+    except BaseException:
+        partial_path.unlink(missing_ok=True)
+        raise
 
-    request_url = response.request.url if response.request is not None else None
+    # after redirects, response.request is the last request; the first one in
+    # the history is the URL the collector asked for
+    first_response = response.history[0] if response.history else response
+    request = first_response.request
+    request_url = request.url if request is not None else None
     headers = response.headers
     return {
         "url": request_url or response.url,
