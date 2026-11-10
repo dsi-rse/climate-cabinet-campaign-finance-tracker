@@ -12,6 +12,7 @@ import requests
 from utils.collect.downloads import (
     ARCHIVE_DIRECTORY,
     DOWNLOAD_MANIFEST_NAME,
+    add_extracted_files,
     archive_path,
     read_download_records,
     save_response,
@@ -322,6 +323,94 @@ def test_texas_logs_a_download_whose_zip_is_bad(tmp_path, fake_response):
     assert record["sha256"] == sha256(b"not a zip")
     assert record["extracted"] == []
     assert (tmp_path / record["path"]).read_bytes() == b"not a zip"
+
+
+HOSTILE_MEMBERS = {
+    "/etc/passwd": b"not the real one\n",
+    "../../outside.csv": b"a,b\n",
+    "ok.csv": b"c,d\n",
+}
+
+
+def test_texas_logs_the_files_written_not_the_names_an_archive_stores(
+    tmp_path, fake_response
+):
+    """A zip member named /etc/passwd or ../x is logged where it was written
+
+    zipfile cleans such names when it extracts, so the files land inside the
+    output directory. Joining the stored name onto the directory instead would
+    point at the real /etc/passwd, and the log would record that file's size
+    and hash.
+
+    Args:
+        tmp_path: Temporary directory for this test (pytest fixture).
+        fake_response: Builds a requests.Response (fixture).
+    """
+    run_tx_collector(
+        tmp_path, make_zip(HOSTILE_MEMBERS), fake_response, "2026-11-10T06:00:00+00:00"
+    )
+
+    (record,) = read_download_records(tmp_path)
+    assert {file["path"]: file["sha256"] for file in record["extracted"]} == {
+        "etc/passwd": sha256(HOSTILE_MEMBERS["/etc/passwd"]),
+        "ok.csv": sha256(HOSTILE_MEMBERS["ok.csv"]),
+        "outside.csv": sha256(HOSTILE_MEMBERS["../../outside.csv"]),
+    }
+
+
+def test_michigan_logs_the_files_written_not_the_names_an_archive_stores(
+    tmp_path, fake_response
+):
+    """A 7z member with an absolute name is logged where py7zr wrote it
+
+    py7zr refuses to write such a name itself, so the check is skipped while
+    building the archive, as a hostile server would.
+
+    Args:
+        tmp_path: Temporary directory for this test (pytest fixture).
+        fake_response: Builds a requests.Response (fixture).
+    """
+    page = '<a href="/-/media/Legacy-Data/2001_mi_cfr.7z">2001</a>'
+    buffer = io.BytesIO()
+    with (
+        mock.patch.object(py7zr.py7zr, "check_archive_path", return_value=True),
+        py7zr.SevenZipFile(buffer, mode="w") as archive,
+    ):
+        archive.writestr(b"not the real one\n", "/etc/passwd")
+        archive.writestr(b"c,d\n", "ok.csv")
+    body = buffer.getvalue()
+
+    def fake_get(url, **kwargs):
+        if url.endswith(".7z"):
+            return fake_response(content=body, url=url)
+        return fake_response(content=page.encode())
+
+    with mock.patch.object(michigan.requests, "get", side_effect=fake_get):
+        michigan.download_MI_data(output_directory=tmp_path)
+
+    (record,) = read_download_records(tmp_path.resolve())
+    assert {file["path"]: file["sha256"] for file in record["extracted"]} == {
+        "LegacyDownloads/2001/etc/passwd": sha256(b"not the real one\n"),
+        "LegacyDownloads/2001/ok.csv": sha256(b"c,d\n"),
+    }
+
+
+def test_extracted_files_outside_the_directory_are_not_listed(tmp_path, caplog):
+    """A path outside the record's directory is left out, whatever it points at
+
+    Args:
+        tmp_path: Temporary directory for this test (pytest fixture).
+        caplog: pytest fixture holding log records.
+    """
+    inside = tmp_path / "raw" / "ok.csv"
+    inside.parent.mkdir()
+    inside.write_bytes(b"c,d\n")
+    outside = tmp_path / "elsewhere.csv"
+    outside.write_bytes(b"secret\n")
+
+    record = add_extracted_files({"extracted": []}, [inside, outside], tmp_path / "raw")
+    assert [file["path"] for file in record["extracted"]] == ["ok.csv"]
+    assert "elsewhere.csv is outside" in caplog.text
 
 
 def test_pennsylvania_logs_a_download_whose_zip_is_bad(tmp_path, fake_response):

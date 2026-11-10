@@ -162,6 +162,38 @@ def test_source_row_counts_malformed_and_empty_lines(tx_directory):
         assert raw_lines[row].split(",")[id_column] == identifier
 
 
+def test_source_row_counts_skipped_lines_in_a_file_with_no_header(tmp_path):
+    """With header: null, skipped lines are counted from the file's first line
+
+    PA's 2002 files have no header row and are read with on_bad_lines: warn.
+    The record number of a skipped line is one less than in a file with a
+    header, so it must not be corrected by a header row that isn't there.
+
+    Args:
+        tmp_path: Temporary directory for this test (pytest fixture).
+    """
+    pa_directory = tmp_path / "pa"
+    shutil.copytree(RAW_FIXTURE_DIRECTORY / "pa", pa_directory)
+    path = pa_directory / "2002" / "contrib_2002.txt"
+    lines = path.read_text(encoding="latin-1").splitlines()
+    raw_lines = [lines[0], lines[0] + ",EXTRA", *lines[1:]]
+    path.write_text("\n".join(raw_lines) + "\n", encoding="latin-1")
+
+    table = standardize("pa", "contributions_2002", pa_directory)
+    assert set(table["source_file"]) == {"2002/contrib_2002.txt"}
+    assert sorted(table["source_row"]) == [1, 3, 4]
+    # with no header, the raw line is line source_row: each row points at a
+    # different real record (the first field is the filer id), never at the
+    # malformed line
+    raw_records = [raw_lines[row - 1] for row in table["source_row"]]
+    assert not any(record.endswith(",EXTRA") for record in raw_records)
+    assert sorted(record.split(",")[0] for record in raw_records) == [
+        "9900000",
+        "9900001",
+        "9900002",
+    ]
+
+
 def test_source_row_skipped_lines_in_warn_mode(tx_directory, monkeypatch, caplog):
     """on_bad_lines: warn counts skipped lines the same way and logs them
 

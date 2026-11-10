@@ -86,7 +86,7 @@ def download_TX_data(output_directory: Path = None) -> None:
         print(f"Kept the original at {zip_path}")
         print("Extracting CSV files...")
 
-        extracted_files = []
+        extracted_paths = []
         try:
             with zipfile.ZipFile(zip_path, "r") as zip_file:
                 # Get list of files in the ZIP
@@ -98,25 +98,24 @@ def download_TX_data(output_directory: Path = None) -> None:
                         continue
 
                     print(f"  Extracting: {filename}")
-                    zip_file.extract(filename, output_directory)
-                    extracted_files.append(filename)
+                    # extract returns where it wrote the file. A stored name
+                    # that is absolute or holds ".." is cleaned first, so it
+                    # is not the same as output_directory / filename
+                    extracted_paths.append(
+                        Path(zip_file.extract(filename, output_directory))
+                    )
         finally:
             # log the download even if extraction fails, since the zip is kept
-            add_extracted_files(
-                record,
-                [output_directory / filename for filename in extracted_files],
-                output_directory,
-            )
+            add_extracted_files(record, extracted_paths, output_directory)
             append_download_record(output_directory, record)
 
         print("Texas data download completed successfully!")
-        print(f"Extracted {len(extracted_files)} files to {output_directory}")
+        print(f"Extracted {len(extracted_paths)} files to {output_directory}")
         print("\nExtracted files:")
-        for filename in extracted_files:
-            file_path = output_directory / filename
+        for file_path in extracted_paths:
             if file_path.exists():
                 file_size = file_path.stat().st_size
-                print(f"  - {filename} ({file_size:,} bytes)")
+                print(f"  - {file_path.name} ({file_size:,} bytes)")
 
     except requests.RequestException as e:
         print(f"Network error occurred while downloading: {e}")

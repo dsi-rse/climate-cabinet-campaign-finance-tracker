@@ -10,6 +10,7 @@ from utils.constants import DEFAULT_SCHEMA_PATH
 from utils.ids import (
     UUID_REGEX,
     create_new_uuid_mapping,
+    handle_existing_ids,
     load_id_mapping,
     replace_null_ids_with_uuids,
     save_id_mapping,
@@ -217,6 +218,73 @@ def test_saved_id_mapping_gives_the_same_ids(tmp_path, tx_transactions):
     first_save = mapping_path.read_bytes()
     save_id_mapping(rerun_normalizer.id_mapping, mapping_path)
     assert mapping_path.read_bytes() == first_save
+
+
+def map_donor_ids(donor_ids: list, years: list) -> tuple[list[str], dict]:
+    """Map a Transactor id column through handle_existing_ids
+
+    Args:
+        donor_ids: Raw donor ids, as a csv or parquet chunk might read them.
+        years: One year per row, or NaN.
+
+    Returns:
+        The mapped id column and the mapping it built.
+    """
+    table = pd.DataFrame(
+        {"donor_id": donor_ids, "year": years, "reported_state": ["tx"] * len(years)}
+    )
+    mapping = {}
+    handle_existing_ids(table, "Transactor", mapping, "donor_id")
+    return list(table["donor_id"]), mapping
+
+
+def test_raw_ids_read_as_floats_get_the_same_uuids():
+    """A csv chunk with a blank reads an id column as floats: 222.0 is 222
+
+    The id column used to be cast to text before it was normalized, so 222.0
+    became "222.0" and got a different uuid than 222 or "222".
+    """
+    as_ints, int_mapping = map_donor_ids([222, 223], [2020, 2020])
+    as_floats, float_mapping = map_donor_ids([222.0, 223.0], [2020, 2020])
+    as_text, _ = map_donor_ids(["222", "223"], [2020, 2020])
+    assert as_ints == as_floats == as_text
+    assert int_mapping == float_mapping
+    assert list(int_mapping) == [
+        ("222", 2020, "tx", "Transactor"),
+        ("223", 2020, "tx", "Transactor"),
+    ]
+
+
+def test_raw_ids_on_rows_with_no_year_are_mapped_and_saved_once(tmp_path):
+    """A row with no year gets a uuid, and its key is found again when saved
+
+    A missing year used to be kept as NaN in the key. NaN never equals
+    itself, so the new key was never found: the raw id stayed in the output
+    and every run added the same row to the mapping again.
+
+    Args:
+        tmp_path: Temporary directory for this test (pytest fixture).
+    """
+    ids, mapping = map_donor_ids([5, 6], [float("nan"), 2020.0])
+    assert all(UUID_REGEX.match(value) for value in ids)
+    assert list(mapping) == [
+        ("5", None, "tx", "Transactor"),
+        ("6", 2020, "tx", "Transactor"),
+    ]
+
+    mapping_path = tmp_path / "id_mapping.tsv"
+    save_id_mapping(mapping, mapping_path)
+    loaded = load_id_mapping(mapping_path)
+    assert loaded == mapping
+    # the rows are found in the loaded mapping, so no new rows are added
+    table = pd.DataFrame(
+        {"donor_id": [5, 6], "year": [float("nan"), 2020.0], "reported_state": "tx"}
+    )
+    handle_existing_ids(table, "Transactor", loaded, "donor_id")
+    assert list(table["donor_id"]) == ids
+    assert loaded == mapping
+    save_id_mapping(loaded, mapping_path)
+    assert load_id_mapping(mapping_path) == mapping
 
 
 def test_id_mapping_with_uuid4_ids_is_refused(tmp_path):

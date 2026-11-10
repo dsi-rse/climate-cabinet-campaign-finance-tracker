@@ -306,7 +306,8 @@ def describe_outputs(
     Args:
         args: Parsed arguments for one step.
         started_at: When the step started, as time.time(). If given, each
-            entry gets "written_by_run": whether the file was modified since.
+            entry gets "written_by_run": whether the file was written or
+            changed since (see _last_changed).
 
     Returns:
         The files in the step's output directory (per state if the step runs
@@ -332,8 +333,26 @@ def describe_outputs(
     if started_at is not None:
         cutoff = started_at - _MODIFIED_TIME_TOLERANCE_SECONDS
         for output, path in zip(outputs, paths, strict=True):
-            output["written_by_run"] = path.stat().st_mtime >= cutoff
+            output["written_by_run"] = _last_changed(path) >= cutoff
     return outputs
+
+
+def _last_changed(path: Path) -> float:
+    """Find when a file was last written or changed
+
+    Args:
+        path: File to check.
+
+    Returns:
+        The later of the file's modification time and its status-change
+        time, as time.time(). Some archive extractors (py7zr) set an
+        extracted file's modification time to the time stored in the archive,
+        which would make a file this run wrote look old. The status-change
+        time is set by the system when a file is written or its metadata
+        changes, and can't be set back.
+    """
+    status = path.stat()
+    return max(status.st_mtime, status.st_ctime)
 
 
 def write_run_manifest(path: Path, manifest: dict) -> None:

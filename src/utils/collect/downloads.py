@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import unquote, urlparse
@@ -38,6 +39,8 @@ __all__ = [
     "read_download_records",
     "save_response",
 ]
+
+logger = logging.getLogger(__name__)
 
 _CHUNK_BYTES = 1024 * 1024
 
@@ -140,19 +143,30 @@ def add_extracted_files(
 ) -> dict:
     """List the files extracted from a downloaded archive in its record
 
+    Only files inside record_relative_to are listed. An archive can store a
+    member name that is absolute or holds "..", and extractors write such a
+    file inside the directory under a cleaned name, so a path outside the
+    directory is not a file this download produced. It is logged and left
+    out rather than read.
+
     Args:
         record: Download record from save_response.
-        paths: Files extracted from the archive.
+        paths: Files extracted from the archive, as written to disk.
         record_relative_to: Directory the paths are written relative to.
 
     Returns:
         The record, with "extracted" holding each file's path, size and sha256.
     """
-    record["extracted"] = [
-        describe_file(path, relative_to=record_relative_to)
-        for path in sorted(Path(path) for path in paths)
-        if path.is_file()
-    ]
+    directory = Path(record_relative_to).resolve()
+    extracted = []
+    for path in sorted(Path(path) for path in paths):
+        if not path.is_file():
+            continue
+        if not path.resolve().is_relative_to(directory):
+            logger.warning("%s is outside %s, so it is not listed", path, directory)
+            continue
+        extracted.append(describe_file(path, relative_to=record_relative_to))
+    record["extracted"] = extracted
     return record
 
 

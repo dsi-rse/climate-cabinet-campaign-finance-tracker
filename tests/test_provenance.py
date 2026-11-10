@@ -5,12 +5,14 @@ import hashlib
 import json
 import os
 import shutil
+import time
 from pathlib import Path
 
 import pytest
 from utils.cli.core import main
 from utils.provenance import (
     RUN_MANIFEST_NAME,
+    describe_outputs,
     git_state,
     run_manifest_path,
     run_step_with_manifest,
@@ -79,6 +81,25 @@ def write_output(args: argparse.Namespace) -> int:
     output_directory = args.output_directory / args.state
     output_directory.mkdir(parents=True, exist_ok=True)
     (output_directory / "Transaction.csv").write_text("amount\n1.00\n")
+    return 0
+
+
+def write_output_with_an_old_mtime(args: argparse.Namespace) -> int:
+    """Fake step that writes a file and sets its modification time back
+
+    py7zr does this when it extracts: each file gets the time stored in the
+    archive, not the time it was written.
+
+    Args:
+        args: Parsed arguments with an output directory and state.
+
+    Returns:
+        0, like the real step functions.
+    """
+    write_output(args)
+    extracted = args.output_directory / args.state / "extracted.csv"
+    extracted.write_text("a\n")
+    os.utime(extracted, (1_000_000_000, 1_000_000_000))
     return 0
 
 
@@ -241,9 +262,10 @@ def test_bookkeeping_errors_do_not_stop_or_hide_the_step(step_args, monkeypatch)
     assert run_step_with_manifest(step_args) == 0
 
 
-def test_manifest_leaves_out_archives_and_marks_stale_outputs(step_args):
-    """Archives, the download log and partial downloads are not listed, and
-    outputs left from an earlier run are marked as not written by this one
+def test_manifest_leaves_out_archives_the_download_log_and_partial_downloads(
+    step_args,
+):
+    """Archives, the download log and partial downloads are not listed
 
     Args:
         step_args: Arguments for a fake per-state step.
@@ -253,10 +275,6 @@ def test_manifest_leaves_out_archives_and_marks_stale_outputs(step_args):
     (state_input / "_archives" / "TEC_CF_CSV.20261110T060000Z.zip").write_bytes(b"z")
     (state_input / "_downloads.jsonl").write_text("{}\n")
     (state_input / "big.zip.part").write_bytes(b"p")
-    stale = step_args.output_directory / "tx" / "Transaction.parquet"
-    stale.parent.mkdir(parents=True)
-    stale.write_bytes(b"old")
-    os.utime(stale, (1_000_000_000, 1_000_000_000))
 
     step_args.pipeline_step_func = write_output
     run_step_with_manifest(step_args)
@@ -264,7 +282,44 @@ def test_manifest_leaves_out_archives_and_marks_stale_outputs(step_args):
     manifest = read_manifest(step_args.output_directory / "tx" / RUN_MANIFEST_NAME)
     assert [file["path"] for file in manifest["inputs"]] == ["Transaction.csv"]
     written = {file["path"]: file["written_by_run"] for file in manifest["outputs"]}
-    assert written == {"Transaction.csv": True, "Transaction.parquet": False}
+    assert written == {"Transaction.csv": True}
+
+
+def test_outputs_from_before_the_run_are_not_written_by_it(step_args):
+    """A file left from an earlier run is marked as not written by this one
+
+    A file's times can't be set back for a test (the system sets its
+    status-change time), so the run is placed after the file instead.
+
+    Args:
+        step_args: Arguments for a fake per-state step.
+    """
+    earlier = step_args.output_directory / "tx" / "Transaction.parquet"
+    earlier.parent.mkdir(parents=True)
+    earlier.write_bytes(b"old")
+
+    outputs = describe_outputs(step_args, started_at=time.time() + 10)
+    assert [(file["path"], file["written_by_run"]) for file in outputs] == [
+        ("Transaction.parquet", False)
+    ]
+
+
+def test_outputs_with_a_restored_old_mtime_are_written_by_the_run(step_args):
+    """A file the step wrote counts as written even if its mtime was set back
+
+    Michigan's collector extracts 7z archives with py7zr, which gives each
+    file the time stored in the archive, so the modification time alone
+    would mark every file it extracts as left from an earlier run.
+
+    Args:
+        step_args: Arguments for a fake per-state step.
+    """
+    step_args.pipeline_step_func = write_output_with_an_old_mtime
+    run_step_with_manifest(step_args)
+
+    manifest = read_manifest(step_args.output_directory / "tx" / RUN_MANIFEST_NAME)
+    written = {file["path"]: file["written_by_run"] for file in manifest["outputs"]}
+    assert written == {"Transaction.csv": True, "extracted.csv": True}
 
 
 def test_normalize_inputs_include_the_id_mapping(step_args):

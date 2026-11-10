@@ -173,11 +173,16 @@ def download_MI_data(
             year_directory = output_directory / year
             year_directory.mkdir(exist_ok=True, parents=True)
 
-            extracted_names = []
+            extracted_paths = []
             try:
                 with py7zr.SevenZipFile(seven_zip_path, mode="r") as archive:
-                    extracted_names = archive.getnames()
                     archive.extractall(path=year_directory)
+                # list what was written, not the archive's stored names: a
+                # stored name can be absolute or hold "..", and py7zr cleans
+                # it when it extracts
+                extracted_paths = [
+                    path for path in year_directory.rglob("*") if path.is_file()
+                ]
 
                 print(f"Successfully extracted Michigan data for {year}")
 
@@ -192,11 +197,7 @@ def download_MI_data(
                 continue
             finally:
                 # log the download even if extraction fails, since the 7z is kept
-                add_extracted_files(
-                    record,
-                    [year_directory / name for name in extracted_names],
-                    state_directory,
-                )
+                add_extracted_files(record, extracted_paths, state_directory)
                 append_download_record(state_directory, record)
 
         print(f"Michigan data download completed. Files saved to {output_directory}")

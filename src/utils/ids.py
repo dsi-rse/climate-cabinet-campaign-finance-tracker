@@ -205,6 +205,31 @@ def source_id_uuid(key: tuple[str, object, object, str]) -> str:
     return deterministic_uuid(["source_id", *key])
 
 
+def _mapping_key(
+    raw_id: object, year: object, reported_state: object, table_name: str
+) -> tuple[str, int | None, str | None, str]:
+    """Build the key a raw id is mapped by, however its parts were read
+
+    Args:
+        raw_id: The state's id as read: 222, 222.0 and "222" all give "222".
+        year: The row's year as read: 2020, 2020.0, or missing.
+        reported_state: The row's state, or missing.
+        table_name: Name of the table the id identifies a row of.
+
+    Returns:
+        (raw id as text, year as an int or None, state or None, table name).
+        Missing values become None, so a key built from a table row equals
+        the same key read back from a saved mapping. A NaN never equals
+        itself, so a key holding one could never be found again.
+    """
+    return (
+        normalize_id_to_string(raw_id),
+        None if _id_part(year) is None else int(float(year)),
+        None if _id_part(reported_state) is None else str(reported_state),
+        table_name,
+    )
+
+
 def map_ids_to_uuids(
     table: pd.DataFrame,
     table_name: str,
@@ -226,14 +251,15 @@ def map_ids_to_uuids(
     """
     if mask is None:
         mask = pd.Series(True, index=table.index)
-    table[id_column] = table[id_column].astype("string")
+    # write each raw id as text the same way however it was read (222 and
+    # 222.0 both become "222") before casting, so it looks up the same key
+    table[id_column] = pd.Series(
+        _column_id_parts(table[id_column]), index=table.index, dtype="string"
+    )
     table.loc[mask, id_column] = table.loc[mask].apply(
         lambda row: id_mapping.get(
-            (
-                normalize_id_to_string(row[id_column]),
-                row.get("year"),
-                row.get("reported_state"),
-                table_name,
+            _mapping_key(
+                row[id_column], row.get("year"), row.get("reported_state"), table_name
             ),
             row[id_column],
         ),
@@ -269,11 +295,8 @@ def create_new_uuid_mapping(
         (table[id_column].notna())
         & (~table[id_column].astype("string").str.match(UUID_REGEX, na=False))
     ].iterrows():
-        key = (
-            normalize_id_to_string(row[id_column]),
-            row.get("year"),
-            row.get("reported_state"),
-            table_name,
+        key = _mapping_key(
+            row[id_column], row.get("year"), row.get("reported_state"), table_name
         )
         if key not in existing_mapping:
             new_mappings[key] = source_id_uuid(key)
@@ -372,6 +395,9 @@ def save_id_mapping(id_mapping: UUIDMapping, file_path: Path) -> None:
         )
 
     id_mapping_df = pd.DataFrame(rows)
+    # a year is written as a whole number and a missing one as blank, so the
+    # file reads back as it was saved even when some rows have no year
+    id_mapping_df["year"] = id_mapping_df["year"].astype("Int64")
     file_path.parent.mkdir(parents=True, exist_ok=True)
     id_mapping_df.to_csv(file_path, sep="\t", index=False)
 
@@ -418,11 +444,8 @@ def load_id_mapping(file_path: Path) -> UUIDMapping:
     # Convert DataFrame back to mapping format
     id_mapping = {}
     for _, row in id_mapping_df.iterrows():
-        key = (
-            row["raw_id"],
-            row["year"] if pd.notna(row["year"]) else None,
-            row["reported_state"] if pd.notna(row["reported_state"]) else None,
-            row["table_name"],
+        key = _mapping_key(
+            row["raw_id"], row["year"], row["reported_state"], row["table_name"]
         )
         id_mapping[key] = row["uuid"]
 
