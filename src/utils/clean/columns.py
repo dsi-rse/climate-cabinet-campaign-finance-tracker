@@ -13,6 +13,16 @@ def _to_decimal_column(
 ) -> pd.Series:
     """Hold a decimal(precision, scale) column as Float64 rounded to scale places
 
+    Args:
+        values: The column to convert. Anything pandas can cast to Float64
+            works, including numeric strings; missing values stay null.
+        column_name: Name of the column, used in the error message.
+        precision: Total number of digits the decimal type allows.
+        scale: Number of those digits after the decimal point.
+
+    Returns:
+        The column as Float64, rounded to `scale` decimal places.
+
     Raises:
         ValueError: if a value has more digits before the decimal point than
             the type allows, since DuckDB would refuse to load the whole table

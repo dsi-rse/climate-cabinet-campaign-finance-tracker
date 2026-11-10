@@ -32,11 +32,20 @@ _DECIMAL_TYPE_PATTERN = re.compile(
 
 
 def parse_decimal_type(schema_type: str) -> tuple[int, int] | None:
-    """(precision, scale) of a schema type like "decimal(18,2)", or None
+    """Read the precision and scale from a schema type like "decimal(18,2)"
 
     Pandas has no simple decimal dtype, so clean holds these columns as Float64
     rounded to `scale` places, and DuckDB stores them as DECIMAL(precision,
     scale), which keeps cents exact in sums.
+
+    Args:
+        schema_type: Type string from a table's `types` in the schema YAML,
+            such as "decimal(18,2)" or "Float64". Case and spaces inside the
+            parentheses are ignored.
+
+    Returns:
+        (precision, scale) as integers if `schema_type` is a decimal type,
+        otherwise None.
     """
     match = _DECIMAL_TYPE_PATTERN.match(str(schema_type))
     if match is None:
