@@ -1,7 +1,9 @@
-"""Re-runs of a step leave nothing from earlier runs, and CSV appends line up
+"""Re-runs of a step leave nothing from earlier runs, and CSV tables read the same
 
-Steps used to keep rows and tables from earlier runs, and CSV chunks could be
-appended under the wrong headers.
+Covers two problems with how steps save and read their output:
+- re-runs kept rows and tables from earlier runs, and CSV chunks could be
+  appended under the wrong headers
+- CSV tables lost leading zeros, depending on which rows shared a chunk
 """
 
 import shutil
@@ -10,9 +12,12 @@ from unittest import mock
 
 import pandas as pd
 import pytest
+from utils.clean.columns import clean_table_columns
 from utils.cli.core import main
-from utils.ids import load_id_mapping, save_id_mapping
+from utils.constants import DEFAULT_SCHEMA_PATH
+from utils.ids import _id_part, load_id_mapping, save_id_mapping, source_id_uuid
 from utils.io import load_database, save_database, staged_directory
+from utils.schema import DataSchema
 
 RAW_FIXTURE_DIRECTORY = Path(__file__).parent / "data" / "standardize" / "raw"
 
@@ -188,3 +193,53 @@ def test_id_mapping_is_not_left_half_written(tmp_path):
 
     assert path.read_bytes() == before
     assert [p.name for p in tmp_path.iterdir()] == ["id_mapping.tsv"]
+
+
+@pytest.mark.parametrize("chunk_size", [None, 1])
+def test_csv_tables_keep_leading_zeros(tmp_path, chunk_size):
+    """Zips and ids read from CSV keep their leading zeros at any chunk size
+
+    Args:
+        tmp_path: Temporary directory for this test (pytest fixture).
+        chunk_size: Rows per chunk, or None for the whole table.
+    """
+    (tmp_path / "Address.csv").write_text(
+        "id,zipcode,city\n0042,01234,NA\nabc,60601,\n"
+    )
+    chunks = list(load_database(tmp_path, format="csv", chunk_size=chunk_size))
+    rows = pd.concat([chunk["Address"] for chunk in chunks])
+    assert rows["id"].tolist() == ["0042", "abc"]
+    assert rows["zipcode"].tolist() == ["01234", "60601"]
+    # only empty fields are missing; "NA" is kept as written
+    assert rows["city"].iloc[0] == "NA"
+    assert pd.isna(rows["city"].iloc[1])
+
+
+def test_clean_converts_whole_numbers_written_as_decimals():
+    """An integer column read as text like "2020.0" still converts
+
+    A float column with missing values is written to CSV as "2020.0".
+    """
+    schema = DataSchema(DEFAULT_SCHEMA_PATH).schema["Transaction"]
+    table = pd.DataFrame(
+        {
+            "amount": ["1.50"],
+            "donor_id": ["d"],
+            "recipient_id": ["r"],
+            "year": ["2020.0"],
+            "day": [None],
+        }
+    )
+    cleaned = clean_table_columns(table, schema)
+    assert cleaned["year"].tolist() == [2020]
+    assert pd.isna(cleaned["day"].iloc[0])
+
+
+def test_ids_match_however_a_number_was_written():
+    """A raw id read as 222, 222.0, "222" or "222.0" gets the same uuid"""
+    assert {_id_part(value) for value in (222, 222.0, "222", "222.0")} == {"222"}
+    assert _id_part("0042") == "0042"
+    assert _id_part("1.5") == "1.5"
+    assert source_id_uuid(("222.0", "2020.0", "TX", "T")) == source_id_uuid(
+        (222, 2020, "TX", "T")
+    )

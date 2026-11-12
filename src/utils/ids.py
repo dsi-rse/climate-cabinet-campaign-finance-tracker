@@ -55,6 +55,10 @@ def normalize_id_to_string(value: int | float | str | None) -> str:
     return str(value)
 
 
+# "222.0" or "-5.00", but not "0042" or "1.5"
+_WHOLE_NUMBER_WITH_ZERO_DECIMALS = re.compile(r"^-?[1-9]\d*\.0+$|^0\.0+$")
+
+
 def _id_part(value: object) -> str | None:
     """Write one value the same way however it was read
 
@@ -63,12 +67,16 @@ def _id_part(value: object) -> str | None:
 
     Returns:
         None for a missing value. Otherwise the value as text, with whole
-        numbers written without a decimal point, so 222, 222.0 and "222" all
-        give "222".
+        numbers written without a decimal point, so 222, 222.0, "222" and
+        "222.0" all give "222". Text like "222.0" comes from a number written
+        to CSV and read back as text. Leading zeros are kept ("0042").
     """
     if value is None or (not isinstance(value, str) and pd.isna(value)):
         return None
-    return normalize_id_to_string(value)
+    text = normalize_id_to_string(value)
+    if _WHOLE_NUMBER_WITH_ZERO_DECIMALS.match(text):
+        return text.split(".")[0]
+    return text
 
 
 def deterministic_uuid(parts: Iterable[object]) -> str:

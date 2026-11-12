@@ -13,6 +13,11 @@ from utils.constants import ID_SUFFIX, SPLIT
 
 FileFormat = Literal["csv", "parquet"]
 
+# CSV tables are read as text, so values like zip "01234" and id "0042" keep
+# their leading zeros and don't change type with the rows around them. Only
+# empty fields are missing; text such as "NA" or "null" is kept as written.
+_CSV_TEXT_READ_PARAMS = {"dtype": str, "keep_default_na": False, "na_values": [""]}
+
 
 @contextmanager
 def staged_directory(final_directory: Path) -> Iterator[Path]:
@@ -126,7 +131,7 @@ def load_table_chunked(
         DataFrame chunks
     """
     if format == "csv":
-        yield from pd.read_csv(file_path, chunksize=chunk_size)
+        yield from pd.read_csv(file_path, chunksize=chunk_size, **_CSV_TEXT_READ_PARAMS)
     elif format == "parquet":
         total_rows = _count_rows(file_path)
         for start in range(0, total_rows, chunk_size):
@@ -185,7 +190,7 @@ def _load_table(file_path: Path, format: FileFormat) -> pd.DataFrame:
     """Load a single table file."""
     if format == "csv":
         try:
-            return pd.read_csv(file_path)
+            return pd.read_csv(file_path, **_CSV_TEXT_READ_PARAMS)
         except pd.errors.EmptyDataError:
             return pd.DataFrame()
     elif format == "parquet":
@@ -303,6 +308,7 @@ def _read_chunk(
             file_path,
             skiprows=range(1, start_row + 1),
             nrows=end_row - start_row,
+            **_CSV_TEXT_READ_PARAMS,
         )
     elif format == "parquet":
         return _read_parquet_chunk(file_path, start_row, end_row)

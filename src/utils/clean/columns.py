@@ -66,6 +66,13 @@ def clean_table_columns(
             table_data[column_name] = _to_decimal_column(
                 table_data[column_name], column_name, *decimal_type
             )
+        elif pd.api.types.is_integer_dtype(pd.api.types.pandas_dtype(column_type)):
+            # through numbers first, so text like "2020.0" (a whole number
+            # written from a float column and read back from CSV) converts;
+            # a value with a fraction still raises
+            table_data[column_name] = pd.to_numeric(table_data[column_name]).astype(
+                column_type
+            )
         else:
             table_data[column_name] = table_data[column_name].astype(column_type)
     return table_data
