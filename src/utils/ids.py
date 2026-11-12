@@ -15,6 +15,7 @@ from pathlib import Path
 import pandas as pd
 
 from utils.constants import DEFAULT_SCHEMA_PATH
+from utils.io import replace_file_atomically
 from utils.schema import DataSchema, TableSchema
 
 # Matches any RFC 4122 uuid. Values that don't match are treated as raw ids.
@@ -394,7 +395,11 @@ def save_id_mapping(id_mapping: UUIDMapping, file_path: Path) -> None:
     # file reads back as it was saved even when some rows have no year
     id_mapping_df["year"] = id_mapping_df["year"].astype("Int64")
     file_path.parent.mkdir(parents=True, exist_ok=True)
-    id_mapping_df.to_csv(file_path, sep="\t", index=False)
+    # written to a temporary file and renamed, so a crash never leaves a
+    # half-written mapping
+    replace_file_atomically(
+        file_path, lambda path: id_mapping_df.to_csv(path, sep="\t", index=False)
+    )
 
 
 def load_id_mapping(file_path: Path) -> UUIDMapping:

@@ -218,6 +218,10 @@ def create_database_from_nested_parquet_directories(
         ).fetchall():
             con.execute(f"DROP TABLE IF EXISTS {table[0]}")
     for state_dir in database_dir.iterdir():
+        # skip files and hidden folders, such as a staging folder left by a
+        # step that was killed (see utils.io.staged_directory)
+        if not state_dir.is_dir() or state_dir.name.startswith("."):
+            continue
         for file in state_dir.glob("*.parquet"):
             try:
                 create_or_append_parquet_to_db(con, file)
