@@ -2,13 +2,16 @@
 
 import logging
 import re
+import warnings
+from functools import cache
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-from utils.constants import RAW_DATA_DIRECTORY
+from utils.constants import DEFAULT_SCHEMA_PATH, RAW_DATA_DIRECTORY
+from utils.schema import DataSchema
 from utils.standardize.config import ConfigHandler
 
 logger = logging.getLogger(__name__)
@@ -35,6 +38,32 @@ _MAX_LISTED_HEADER_DIFFERENCES = 5
 _PARTIAL_ENUM_COLUMNS = ("transaction_direction",)
 COERCED_VALUE_COLUMNS = ["column", "step", "raw_value", "count"]
 COERCED_VALUE_REPORT_COLUMNS = ["state", "form", "file", *COERCED_VALUE_COLUMNS]
+
+# Columns that record where each row came from: the raw file's path relative to
+# the state's data directory, and the row's record number in that file
+# (starting at 1 after any header, counting blank and malformed lines). They are
+# filled for tables whose schema lists them.
+SOURCE_FILE_COLUMN = "source_file"
+SOURCE_ROW_COLUMN = "source_row"
+# How read_csv reports each malformed line it skips under on_bad_lines: warn
+_SKIPPED_LINE_PATTERN = re.compile(r"Skipping line (\d+):")
+
+
+@cache
+def _table_attributes(table_name: str) -> frozenset[str]:
+    """Look up the attributes a table has in the default schema
+
+    Args:
+        table_name: Name of a table in the default schema, such as "Transaction".
+
+    Returns:
+        The table's attribute names, or an empty set if the schema has no such
+        table.
+    """
+    schema = DataSchema(DEFAULT_SCHEMA_PATH).schema
+    if table_name not in schema:
+        return frozenset()
+    return frozenset(schema[table_name].attributes)
 
 
 def _file_label(path: Path, state_data_directory: Path) -> str:
@@ -276,6 +305,76 @@ class DataReader:
                     f" form's column_order has {len(names)}"
                 )
 
+    def _read_csv_keeping_record_positions(self, path: str | Path) -> pd.DataFrame:
+        """Read a file so each row's index is its record's position in the file
+
+        read_csv numbers the rows it keeps 0, 1, 2, ..., so after a blank or
+        malformed line it drops, every later row would have a lower number than
+        its record. Here blank lines are kept (as empty rows, which
+        _drop_blank_rows removes later) and the records read_csv skips under
+        `on_bad_lines: warn` or `skip` are found from the warnings it gives,
+        so the index counts every record after the header: blank, malformed
+        or kept. A quoted value that spans lines is one record.
+
+        Args:
+            path: Raw data file.
+
+        Returns:
+            The table, indexed by each row's 0-based record position.
+        """
+        params = dict(self.read_csv_params)
+        params.setdefault("skip_blank_lines", False)
+        bad_lines = params.get("on_bad_lines")
+        header = params.get("header", 0)
+        # only the C parser's warn mode reports which lines it skips
+        if (
+            bad_lines not in ("warn", "skip")
+            or params.get("engine", "c") != "c"
+            or not (header is None or isinstance(header, int))
+        ):
+            return pd.read_csv(str(path), dtype=self.dtype_dict, **params)
+
+        params["on_bad_lines"] = "warn"
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            table = pd.read_csv(str(path), dtype=self.dtype_dict, **params)
+
+        skipped_lines = []
+        for warning in caught:
+            message = str(warning.message)
+            line_numbers = _SKIPPED_LINE_PATTERN.findall(message)
+            if issubclass(warning.category, pd.errors.ParserWarning) and line_numbers:
+                skipped_lines.extend(int(number) for number in line_numbers)
+            else:
+                warnings.warn_explicit(
+                    warning.message,
+                    warning.category,
+                    warning.filename,
+                    warning.lineno,
+                )
+        if not skipped_lines:
+            return table
+
+        if bad_lines == "warn":
+            logger.warning(
+                "%s: skipped %d malformed lines (first: line %d)",
+                path,
+                len(skipped_lines),
+                min(skipped_lines),
+            )
+        # read_csv's line numbers count from 1 and include the header row
+        header_rows = 0 if header is None else header + 1
+        skipped_positions = {line - 1 - header_rows for line in skipped_lines}
+        record_count = len(table) + len(skipped_positions)
+        table.index = pd.Index(
+            [
+                position
+                for position in range(record_count)
+                if position not in skipped_positions
+            ]
+        )
+        return table
+
     def read_tabular_data(
         self,
         path: str | Path,
@@ -303,11 +402,7 @@ class DataReader:
 
         self._check_header(path)
 
-        table = pd.read_csv(
-            str(path),
-            dtype=self.dtype_dict,
-            **self.read_csv_params,
-        )
+        table = self._read_csv_keeping_record_positions(path)
         table = self._drop_blank_rows(table)
         table = self._filter_dataframe_to_year_range(table, start_year, end_year)
         table = self._filter_data(table)
@@ -784,6 +879,53 @@ class DataSourceStandardizationPipeline:
             state=self.state_code, form=self.form_code, file=file_name
         )[COERCED_VALUE_REPORT_COLUMNS]
 
+    def _add_source_columns(
+        self,
+        standard_data_table: pd.DataFrame,
+        file_label: str,
+        raw_row_positions: pd.Index,
+    ) -> pd.DataFrame:
+        """Record which file and row each standardized row came from
+
+        Only tables whose schema lists SOURCE_FILE_COLUMN or SOURCE_ROW_COLUMN
+        get them. Row numbers come from the reader's index, each row's record
+        position in the file (see DataReader._read_csv_keeping_record_positions),
+        which every standardization step keeps, so they are only added when
+        the reader returned an integer index. Blank and malformed records
+        count, so source_row is the record number after the header; it equals
+        the line number after the header unless a quoted value spans lines.
+
+        Args:
+            standard_data_table: One file's rows after standardization.
+            file_label: The file's path relative to the state's data directory.
+            raw_row_positions: Index of the table the reader returned, before
+                standardization.
+
+        Returns:
+            standard_data_table with the source columns its schema lists.
+
+        Raises:
+            ValueError: if standardization added, dropped or renumbered rows,
+                so they can no longer be matched to their rows in the file.
+        """
+        attributes = _table_attributes(self.table_name)
+        if SOURCE_FILE_COLUMN in attributes:
+            standard_data_table[SOURCE_FILE_COLUMN] = file_label
+        if SOURCE_ROW_COLUMN in attributes and pd.api.types.is_integer_dtype(
+            raw_row_positions
+        ):
+            row_positions = standard_data_table.index
+            if not row_positions.sort_values().equals(raw_row_positions.sort_values()):
+                raise ValueError(
+                    f"{self.state_code} {self.form_code} {file_label}: rows were "
+                    "added, dropped or renumbered during standardization, so they "
+                    "can't be matched to their rows in the file"
+                )
+            standard_data_table[SOURCE_ROW_COLUMN] = pd.array(
+                row_positions.to_numpy() + 1, dtype="Int64"
+            )
+        return standard_data_table
+
     def _raw_data_file_paths(
         self, state_data_directory: Path | None = None
     ) -> list[Path]:
@@ -853,6 +995,10 @@ class DataSourceStandardizationPipeline:
             )
             if raw_data_table.empty:
                 continue
+            file_label = _file_label(data_path, state_data_directory)
+            # each row's record position in the file, kept after blank,
+            # malformed and filtered rows are dropped
+            raw_row_positions = raw_data_table.index
 
             standard_schema_table = self.schema_transformer.standardize_schema(
                 raw_data_table
@@ -860,10 +1006,13 @@ class DataSourceStandardizationPipeline:
             standard_data_table = self.data_standardizer.standardize_data(
                 standard_schema_table
             )
+            standard_data_table = self._add_source_columns(
+                standard_data_table, file_label, raw_row_positions
+            )
             standardized_tables.append(standard_data_table)
             file_coerced_values = self._collect_coerced_values(
                 getattr(self.data_standardizer, "coerced_values", None),
-                _file_label(data_path, state_data_directory),
+                file_label,
             )
             if file_coerced_values is not None:
                 coerced_value_tables.append(file_coerced_values)

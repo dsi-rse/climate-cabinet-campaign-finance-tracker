@@ -10,7 +10,7 @@ from utils.collect.election.minnesota import (
     standardize_results,
 )
 from utils.constants import DEFAULT_SCHEMA_PATH
-from utils.ids import UUID4_REGEX
+from utils.ids import UUID_REGEX
 from utils.normalize import Normalizer
 
 GENERAL_ROWS = [
@@ -112,7 +112,7 @@ def test_standardized_results_normalize(write_result_file):
     database = normalizer.normalize_database()
     election_results = database["ElectionResult"]
     elections = database["Election"]
-    assert election_results["id"].str.match(UUID4_REGEX).all()
+    assert election_results["id"].str.match(UUID_REGEX).all()
     assert len(elections) == len(raw_election_ids)
     assert election_results["election_id"].isin(elections["id"]).all()
     mapped_raw_ids = {key[0] for key in normalizer.id_mapping}
@@ -142,8 +142,8 @@ def test_get_office_sought_unknown_raises():
         get_office_sought("County Sheriff")
 
 
-def test_download_result_file_missing_returns_none(mocker, tmp_path):
-    response = mocker.Mock(status_code=HTTPStatus.NOT_FOUND)
+def test_download_result_file_missing_returns_none(mocker, tmp_path, fake_response):
+    response = fake_response(status_code=HTTPStatus.NOT_FOUND)
     mocker.patch("utils.collect.election.minnesota.requests.get", return_value=response)
     assert (
         download_result_file(Election("20180814", "primary"), "stsenate.txt", tmp_path)
@@ -151,20 +151,16 @@ def test_download_result_file_missing_returns_none(mocker, tmp_path):
     )
 
 
-def test_download_result_file_rejects_html(mocker, tmp_path):
-    response = mocker.Mock(
-        status_code=HTTPStatus.OK, headers={"Content-Type": "text/html"}
-    )
+def test_download_result_file_rejects_html(mocker, tmp_path, fake_response):
+    response = fake_response(headers={"Content-Type": "text/html"})
     mocker.patch("utils.collect.election.minnesota.requests.get", return_value=response)
     with pytest.raises(ValueError, match="HTML"):
         download_result_file(Election("20221108", "general"), "stsenate.txt", tmp_path)
 
 
-def test_download_result_file_saves_by_date(mocker, tmp_path):
-    response = mocker.Mock(
-        status_code=HTTPStatus.OK,
-        headers={"Content-Type": "text/plain"},
-        content=GENERAL_ROWS[0].encode(),
+def test_download_result_file_saves_by_date(mocker, tmp_path, fake_response):
+    response = fake_response(
+        headers={"Content-Type": "text/plain"}, content=GENERAL_ROWS[0].encode()
     )
     mocker.patch("utils.collect.election.minnesota.requests.get", return_value=response)
     file_path = download_result_file(

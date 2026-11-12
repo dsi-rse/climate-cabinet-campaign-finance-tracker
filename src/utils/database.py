@@ -116,7 +116,8 @@ def create_or_append_parquet_to_db(
         # DuckDB to match by name rather than position.
         con.execute(
             f"INSERT INTO {table_path.stem} ({column_list}) "
-            f"SELECT {column_list} FROM read_parquet('{str(table_path.resolve())}')"
+            f"SELECT {_parquet_select_list(con, table_path, table_columns)} "
+            f"FROM read_parquet('{str(table_path.resolve())}')"
         )
     else:
         # Create the table explicitly using the YAML schema definitions so column
@@ -141,10 +142,48 @@ def create_or_append_parquet_to_db(
         # Insert data from the Parquet file into the table, aligning by column
         # names present in the YAML schema.
         column_list = ", ".join(table_schema.types.keys())
+        select_list = _parquet_select_list(
+            con, table_path, list(table_schema.types.keys())
+        )
         con.execute(
             f"INSERT INTO {table_path.stem} ({column_list}) "
-            f"SELECT {column_list} FROM read_parquet('{str(table_path.resolve())}')"
+            f"SELECT {select_list} FROM read_parquet('{str(table_path.resolve())}')"
         )
+
+
+def _parquet_select_list(
+    con: duckdb.DuckDBPyConnection, table_path: Path, columns: list[str]
+) -> str:
+    """Select columns from a parquet file, with NULL for any it lacks
+
+    Files written before a column was added to the schema (for example the
+    Transaction source columns) don't have it. Filling it with NULL loads
+    those files instead of failing on the missing column.
+
+    Args:
+        con: DuckDB connection.
+        table_path: Parquet file to read.
+        columns: Columns to select, in order.
+
+    Returns:
+        A comma-separated SELECT list.
+    """
+    parquet_columns = {
+        row[0]
+        for row in con.execute(
+            f"DESCRIBE SELECT * FROM read_parquet('{str(table_path.resolve())}')"
+        ).fetchall()
+    }
+    missing = [column for column in columns if column not in parquet_columns]
+    if missing:
+        print(
+            f"{table_path} has no {', '.join(missing)} column(s); they are loaded"
+            " as NULL. Re-run the pipeline from standardize to fill them."
+        )
+    return ", ".join(
+        column if column in parquet_columns else f"NULL AS {column}"
+        for column in columns
+    )
 
 
 def create_database_from_nested_parquet_directories(

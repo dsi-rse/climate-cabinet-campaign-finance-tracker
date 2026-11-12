@@ -17,6 +17,9 @@ from splink import DuckDBAPI, Linker, SettingsCreator, block_on
 # Tables larger than this are sampled down before training to limit disk usage
 TRAINING_SAMPLE_SIZE = 200_000
 TRAINING_SAMPLE_TABLE = "random_subset"
+# Seed for the training sample and for estimating u, so training on the same
+# data gives the same model
+TRAINING_SEED = 42
 # Key used to store per-level EM training history inside checkpoint files
 TRAINED_M_HISTORY_KEY = "cft_trained_m_history"
 
@@ -27,15 +30,20 @@ def create_random_individuals_subset(
     """Create a temp table that is a random subset of individuals in table_name
 
     Individuals are filtered before sampling so the subset has `size` rows
-    whenever the table has at least that many individuals.
+    whenever the table has at least that many individuals. Rows are picked by
+    a hash of their id and TRAINING_SEED (ties broken by a hash of the whole
+    row), not by DuckDB's sampling: a seeded sample depends on the order rows
+    are scanned in, which changes when the database is rebuilt or read with
+    more threads. Ids are repeatable, so the same data gives the same sample.
     """
     con.execute(f"""
         CREATE OR REPLACE TEMP TABLE {TRAINING_SAMPLE_TABLE} AS
-        SELECT *
+        SELECT individuals.*
         FROM (
             SELECT * FROM {table_name} WHERE transactor_type = 'Individual'
-        )
-        USING SAMPLE {size} ROWS (RESERVOIR)
+        ) AS individuals
+        ORDER BY hash(individuals.id, {TRAINING_SEED}), hash(individuals)
+        LIMIT {size}
     """)
 
 
@@ -185,7 +193,9 @@ def train_splink(
         linker.training.estimate_probability_two_random_records_match(
             deterministic_rules, recall=0.9
         )
-        linker.training.estimate_u_using_random_sampling(max_pairs=1e8)
+        linker.training.estimate_u_using_random_sampling(
+            max_pairs=1e8, seed=TRAINING_SEED
+        )
         training_blocking_rule = block_on("first_name", "last_name")
 
         linker.training.estimate_parameters_using_expectation_maximisation(

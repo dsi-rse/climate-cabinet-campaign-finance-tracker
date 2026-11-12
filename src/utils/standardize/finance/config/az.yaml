@@ -753,6 +753,7 @@ mdb_transactions:
 
     - raw_name: "TransactionID"
       type: Int64
+      standard_name: source_identifier
 
     - raw_name: "ModifiesTransactionID"
       type: Int64

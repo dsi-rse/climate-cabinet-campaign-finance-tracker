@@ -21,14 +21,20 @@ Data notes:
 import datetime
 import zipfile
 from http import HTTPStatus
-from io import BytesIO
 from pathlib import Path
 
 import requests
 from tqdm import tqdm
 
+from utils.collect.downloads import (
+    add_extracted_files,
+    append_download_record,
+    archive_path,
+    save_response,
+)
 from utils.collect.state_collection_registry import register_special_state_collector
 from utils.constants import DATA_DIR
+from utils.provenance import utc_now
 
 EARLIEST_YEAR = 2000
 
@@ -45,17 +51,18 @@ def download_PA_data(
         output_directory: desired output location. Defaults to 'data/raw/PA'
     Modifies:
         Saves raw files from dos.pa.gov to output_directory with a separate directory
-        for each year's files.
+        for each year's files. Each year's zip is kept in output_directory/_archives
+        with its retrieval time in the name, and each download is logged in
+        output_directory/_downloads.jsonl.
     """
     if output_directory is None:
         output_directory = DATA_DIR / "raw" / "pa"
+    else:
+        output_directory = Path(output_directory).resolve()
     if start_year is None:
         start_year = EARLIEST_YEAR
     if end_year is None:
         end_year = datetime.datetime.now().year
-
-    else:
-        output_directory = Path(output_directory).resolve()
     pa_url = "https://www.pa.gov/content/dam/copapwp-pagov/en/dos/resources/voting-and-elections/campaign-finance/campaign-finance-data/"  # noqa
 
     total_years = end_year - start_year + 1
@@ -66,21 +73,33 @@ def download_PA_data(
     ):
         link = f"{pa_url}{year}.zip"
 
-        response = requests.get(link, timeout=10)
-        if response.status_code != HTTPStatus.OK:
-            print(f"Pennsylvania data from {year} returned {response.reason}")
-            continue
+        retrieved_at = utc_now()
+        with requests.get(link, timeout=10, stream=True) as response:
+            if response.status_code != HTTPStatus.OK:
+                print(f"Pennsylvania data from {year} returned {response.reason}")
+                continue
+            zip_path = archive_path(output_directory, link, retrieved_at)
+            record = save_response(
+                response, zip_path, output_directory, retrieved_at=retrieved_at
+            )
 
         year_directory = output_directory / str(year)
         year_directory.mkdir(exist_ok=True, parents=True)
-        zippedfiles = zipfile.ZipFile(BytesIO(response.content))
-        for zippedfile in zippedfiles.infolist():
-            # some years have all contents in a single directory named after the
-            # year by default
-            if zippedfile.filename.startswith(f"{year}/"):
-                zippedfiles.extract(zippedfile, output_directory)
-            else:
-                zippedfiles.extract(zippedfile, year_directory)
+        extracted_paths = []
+        try:
+            with zipfile.ZipFile(zip_path) as zippedfiles:
+                for zippedfile in zippedfiles.infolist():
+                    # some years have all contents in a single directory named
+                    # after the year by default
+                    if zippedfile.filename.startswith(f"{year}/"):
+                        extracted = zippedfiles.extract(zippedfile, output_directory)
+                    else:
+                        extracted = zippedfiles.extract(zippedfile, year_directory)
+                    extracted_paths.append(Path(extracted))
+        finally:
+            # log the download even if extraction fails, since the zip is kept
+            add_extracted_files(record, extracted_paths, output_directory)
+            append_download_record(output_directory, record)
 
 
 if __name__ == "__main__":

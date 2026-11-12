@@ -37,7 +37,9 @@ from pathlib import Path
 import pandas as pd
 import requests
 
+from utils.collect.downloads import append_download_record, save_response
 from utils.constants import DATA_DIR
+from utils.provenance import utc_now
 
 BASE_URL = "https://electionresultsfiles.sos.mn.gov"
 REQUEST_TIMEOUT = 30
@@ -130,23 +132,27 @@ def download_result_file(
         election: Election to download results for.
         file_name: Name of the media file, e.g. "stsenate.txt".
         output_directory: Directory raw files are saved to. Files are saved
-            as <output_directory>/<YYYYMMDD>/<file_name>.
+            as <output_directory>/<YYYYMMDD>/<file_name>, and each download is
+            logged in <output_directory>/_downloads.jsonl.
 
     Returns:
         Path to the downloaded file, or None if the file does not exist for
         this election (for example, no State Senate races in 2018).
     """
     url = f"{BASE_URL}/{election.date}/{file_name}"
-    response = requests.get(url, timeout=REQUEST_TIMEOUT)
-    if response.status_code == HTTPStatus.NOT_FOUND:
-        return None
-    response.raise_for_status()
-    if response.headers.get("Content-Type", "").startswith("text/html"):
-        raise ValueError(f"Expected a results text file but got HTML from {url}")
+    retrieved_at = utc_now()
+    with requests.get(url, timeout=REQUEST_TIMEOUT, stream=True) as response:
+        if response.status_code == HTTPStatus.NOT_FOUND:
+            return None
+        response.raise_for_status()
+        if response.headers.get("Content-Type", "").startswith("text/html"):
+            raise ValueError(f"Expected a results text file but got HTML from {url}")
 
-    file_path = output_directory / election.date / file_name
-    file_path.parent.mkdir(parents=True, exist_ok=True)
-    file_path.write_bytes(response.content)
+        file_path = output_directory / election.date / file_name
+        record = save_response(
+            response, file_path, output_directory, retrieved_at=retrieved_at
+        )
+    append_download_record(output_directory, record)
     return file_path
 
 

@@ -22,7 +22,9 @@ def determined_uuids(mocker):
     side_effect = (
         UUID(f"00000000-0000-4000-8000-{i:012}", version=4) for i in range(1, 10000)
     )
-    return mocker.patch("uuid.uuid4", side_effect=side_effect)
+    # ids are uuid5s made from row values; a fixed sequence keeps the expected
+    # tables readable
+    return mocker.patch("uuid.uuid5", side_effect=side_effect)
 
 
 def make_df_standard_for_testing(df: pd.DataFrame, columns: pd.Index) -> pd.DataFrame:
@@ -649,7 +651,7 @@ def test_split_prefixed_columns(
         (
             "relationship-table",
             {
-                # ids outside the mocked uuid4 sequence, so the organizations'
+                # ids outside the mocked uuid sequence, so the organizations'
                 # new ids can't collide with the members'
                 "id": [SOURCE_ID_A, SOURCE_ID_B],
                 "full_name": ["Fake Name", "Other Name"],
