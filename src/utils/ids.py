@@ -17,17 +17,12 @@ import pandas as pd
 from utils.constants import DEFAULT_SCHEMA_PATH
 from utils.schema import DataSchema, TableSchema
 
-# Matches any RFC 4122 uuid: the uuid5s made here, and uuid4s made by earlier
-# versions of the pipeline. Values that don't match are treated as raw ids.
+# Matches any RFC 4122 uuid. Values that don't match are treated as raw ids.
 UUID_REGEX = re.compile(
     r"^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$",
     re.IGNORECASE,
 )
-# kept for code that imported the old name
-UUID4_REGEX = UUID_REGEX
 
-# Every id the pipeline makes is a uuid of this version
-ID_UUID_VERSION = 5
 # Namespace for every id the pipeline makes. Changing it changes every id.
 ID_NAMESPACE = uuid.uuid5(
     uuid.NAMESPACE_URL,
@@ -410,11 +405,6 @@ def load_id_mapping(file_path: Path) -> UUIDMapping:
 
     Returns:
         Dictionary mapping tuples to UUIDs
-
-    Raises:
-        ValueError: if the file holds ids that are not uuid5s. Those were made
-            before ids were repeatable, and reusing them would mix old and new
-            ids in one output.
     """
     if not file_path.exists():
         return {}
@@ -428,19 +418,6 @@ def load_id_mapping(file_path: Path) -> UUIDMapping:
         keep_default_na=False,
         na_values={"year": [""], "reported_state": [""]},
     )
-    old_ids = [
-        value
-        for value in id_mapping_df["uuid"]
-        if uuid.UUID(value).version != ID_UUID_VERSION
-    ]
-    if old_ids:
-        raise ValueError(
-            f"{file_path} holds {len(old_ids)} ids that are not uuid5s (for"
-            f" example {old_ids[0]}). It was written before ids were repeatable."
-            " Delete it and the outputs next to it, then re-run normalize, clean"
-            " and link (with --overwrite) from data standardized by this version."
-        )
-
     # Convert DataFrame back to mapping format
     id_mapping = {}
     for _, row in id_mapping_df.iterrows():

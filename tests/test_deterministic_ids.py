@@ -86,8 +86,8 @@ def ids_by_source_row(database: dict) -> dict[tuple, tuple]:
     }
 
 
-def test_uuid_regex_accepts_uuid4_and_uuid5_but_not_raw_ids():
-    """Both id versions count as uuids; raw ids do not"""
+def test_uuid_regex_accepts_uuids_but_not_raw_ids():
+    """A uuid of any version counts as an id; raw ids do not"""
     assert UUID_REGEX.match(str(uuid.uuid4()))
     assert UUID_REGEX.match(source_id_uuid(("222", None, "TX", "Transactor")))
     assert not UUID_REGEX.match("222")
@@ -285,20 +285,6 @@ def test_raw_ids_on_rows_with_no_year_are_mapped_and_saved_once(tmp_path):
     assert loaded == mapping
     save_id_mapping(loaded, mapping_path)
     assert load_id_mapping(mapping_path) == mapping
-
-
-def test_id_mapping_with_uuid4_ids_is_refused(tmp_path):
-    """A mapping saved before ids were uuid5s would mix old and new ids
-
-    Args:
-        tmp_path: Temporary directory for this test (pytest fixture).
-    """
-    mapping_path = tmp_path / "id_mapping.tsv"
-    save_id_mapping(
-        {("222", None, "tx", "Transactor"): str(uuid.uuid4())}, mapping_path
-    )
-    with pytest.raises(ValueError, match="not uuid5s"):
-        load_id_mapping(mapping_path)
 
 
 def test_raw_ids_keep_leading_zeros_when_loaded(tmp_path):
