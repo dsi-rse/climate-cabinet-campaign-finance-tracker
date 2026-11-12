@@ -1,8 +1,9 @@
-"""Re-runs of a step leave nothing from earlier runs, and CSV tables read the same
+"""Chunked steps give the same output as unchunked ones, with nothing left over
 
-Covers two problems with how steps save and read their output:
+Covers three problems with how steps save their output:
 - re-runs kept rows and tables from earlier runs, and CSV chunks could be
   appended under the wrong headers
+- an entity found in more than one chunk got one row per chunk
 - CSV tables lost leading zeros, depending on which rows shared a chunk
 """
 
@@ -70,6 +71,58 @@ def read_tables(directory: Path, format: str = "parquet") -> dict[str, pd.DataFr
         Table name to table.
     """
     return next(load_database(directory, format=format))
+
+
+def sorted_rows(table: pd.DataFrame) -> list[tuple]:
+    """List a table's rows as text, sorted, so tables can be compared
+
+    Args:
+        table: Table to list.
+
+    Returns:
+        Each row as a tuple of text values (missing values as ""), sorted.
+    """
+    values = table.reindex(sorted(table.columns), axis=1).astype(object)
+    values = values.where(values.notna(), "").astype(str)
+    return sorted(values.itertuples(index=False, name=None))
+
+
+@pytest.mark.parametrize("format", ["parquet", "csv"])
+@pytest.mark.parametrize("chunk_size", ["1", "2", "4"])
+def test_chunked_normalize_and_clean_match_unchunked(
+    data_directory, format, chunk_size
+):
+    """Chunked runs give the same tables, with one row per id
+
+    Each step is run once without chunks (into its default folder) and once
+    with chunks (into another folder), on the same unchunked input.
+
+    Args:
+        data_directory: Data folder with the Texas fixtures.
+        format: Input and output format for normalize and clean.
+        chunk_size: Rows per chunk for normalize and clean.
+    """
+    formats = ["--input-format", format, "--output-format", format]
+    run("standardize", data_directory, "--output-format", format)
+    for step, output_name in (("normalize", "normalized"), ("clean", "cleaned")):
+        run(step, data_directory, *formats)
+        chunked_directory = data_directory / f"{output_name}_chunked"
+        run(
+            step,
+            data_directory,
+            *formats,
+            "--chunk-size",
+            chunk_size,
+            "--output-directory",
+            str(chunked_directory),
+        )
+        whole = read_tables(data_directory / output_name / "tx", format)
+        chunked = read_tables(chunked_directory / "tx", format)
+        assert set(chunked) == set(whole)
+        for name, table in chunked.items():
+            if "id" in table:
+                assert table["id"].dropna().is_unique, f"{step} {name}"
+            assert sorted_rows(table) == sorted_rows(whole[name]), f"{step} {name}"
 
 
 def test_rerun_removes_tables_and_files_from_earlier_runs(data_directory):

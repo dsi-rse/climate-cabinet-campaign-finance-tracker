@@ -37,6 +37,7 @@ from utils.ids import (
     handle_id_column,
     replace_null_ids_with_uuids,
 )
+from utils.io import FileFormat, load_table, save_database, table_column
 from utils.schema import DataSchema
 
 REPEATING_COLUMN_REGEX = r"^[A-Za-z_]+-\d+$"
@@ -385,10 +386,7 @@ class Normalizer:
     ) -> pd.DataFrame:
         """Combine rows that have the same id into one row
 
-        The same entity can be extracted more than once: as the donor in one
-        transaction and the recipient in another, or reported with different
-        values in different rows. Each column keeps its first non-null value.
-        Ids whose rows disagree on a value are reported in a warning.
+        See combine_rows_sharing_an_id.
 
         Args:
             table: normalized table
@@ -397,24 +395,7 @@ class Normalizer:
         Returns:
             table with at most one row per non-null id
         """
-        if "id" not in table.columns or not table["id"].dropna().duplicated().any():
-            return table
-        has_id = table["id"].notna()
-        rows_with_id = table[has_id]
-        repeated = rows_with_id[rows_with_id["id"].duplicated(keep=False)]
-        # an id conflicts when any column has more than one distinct value
-        conflicting = (repeated.groupby("id").nunique() > 1).any(axis=1)  # noqa: PD101
-        if conflicting.any():
-            warnings.warn(
-                f"{conflicting.sum()} {table_name} id(s) had rows with conflicting "
-                "values; kept the first non-null value in each column. Example ids: "
-                f"{', '.join(map(str, conflicting[conflicting].index[:5]))}",
-                stacklevel=2,
-            )
-        combined = rows_with_id.groupby("id", sort=False, as_index=False).first()
-        if has_id.all():
-            return combined
-        return pd.concat([combined, table[~has_id]], ignore_index=True)
+        return combine_rows_sharing_an_id(table, table_name)
 
     def _get_foreign_columns(
         self, table: pd.DataFrame, relation_prefix: str
@@ -742,3 +723,88 @@ class Normalizer:
             ]
             database_class_table[table_name] = parent_table
         return database_class_table
+
+
+def combine_rows_sharing_an_id(table: pd.DataFrame, table_name: str) -> pd.DataFrame:
+    """Combine rows that have the same id into one row
+
+    The same entity can be extracted more than once: as the donor in one
+    transaction and the recipient in another, reported with different values
+    in different rows, or found in more than one chunk. Each column keeps its
+    first non-null value. Ids whose rows disagree on a value are reported in a
+    warning.
+
+    Args:
+        table: normalized table
+        table_name: name of table, used in the warning
+
+    Returns:
+        table with at most one row per non-null id. Rows without an id are
+        kept as they are, after the combined rows.
+    """
+    if "id" not in table.columns or not table["id"].dropna().duplicated().any():
+        return table
+    has_id = table["id"].notna()
+    rows_with_id = table[has_id]
+    repeated = rows_with_id[rows_with_id["id"].duplicated(keep=False)]
+    # an id conflicts when any column has more than one distinct value
+    conflicting = (repeated.groupby("id").nunique() > 1).any(axis=1)  # noqa: PD101
+    if conflicting.any():
+        warnings.warn(
+            f"{conflicting.sum()} {table_name} id(s) had rows with conflicting "
+            "values; kept the first non-null value in each column. Example ids: "
+            f"{', '.join(map(str, conflicting[conflicting].index[:5]))}",
+            stacklevel=2,
+        )
+    combined = rows_with_id.groupby("id", sort=False, as_index=False).first()
+    if has_id.all():
+        return combined
+    return pd.concat([combined, table[~has_id]], ignore_index=True)
+
+
+def combine_duplicates_across_chunks(
+    directory: Path, format: FileFormat, schema: DataSchema | Path | str
+) -> None:
+    """Remove the duplicates that appending chunks leaves in saved tables
+
+    normalize and clean remove duplicates within each chunk, then append each
+    chunk to the table files, so an entity found in more than one chunk gets
+    one row per chunk. This does across all chunks what is already done
+    within each one:
+    - tables with an id column: rows sharing an id are combined, as in
+      combine_rows_sharing_an_id. Only the id column is read unless an id
+      repeats.
+    - tables that normalize splits off another table and that have no id
+      (Address, Membership): exact duplicate rows are dropped, as
+      _split_prefixed_columns does within a chunk.
+    Other tables, such as Transaction, are left alone: two identical
+    transactions can be two real payments.
+
+    Args:
+        directory: Folder holding one file per table.
+        format: "csv" or "parquet".
+        schema: DataSchema, or path to the schema YAML.
+    """
+    if not isinstance(schema, DataSchema):
+        schema = DataSchema(schema)
+    split_off_tables = {
+        schema.schema[table_name].relations[prefix]
+        for table_name in schema.schema
+        for prefix in schema.schema[table_name].reverse_relations
+    }
+    for file_path in sorted(Path(directory).glob(f"*.{format}")):
+        table_name = file_path.stem
+        ids = table_column(file_path, format, "id")
+        if ids is not None:
+            if not ids.dropna().duplicated().any():
+                continue
+            table = load_table(file_path, format)
+            deduplicated = combine_rows_sharing_an_id(table, table_name)
+        elif table_name in split_off_tables:
+            table = load_table(file_path, format)
+            if not table.duplicated().any():
+                continue
+            deduplicated = table.drop_duplicates(ignore_index=True)
+        else:
+            continue
+        save_database({table_name: deduplicated}, directory, format=format)

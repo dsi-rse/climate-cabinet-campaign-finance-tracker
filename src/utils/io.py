@@ -186,6 +186,43 @@ def _get_data_files(path: Path, format: FileFormat) -> list[Path]:
     return [f for f in path.iterdir() if f.suffix == f".{format}"]
 
 
+def load_table(file_path: Path, format: FileFormat) -> pd.DataFrame:
+    """Load a whole table file
+
+    Args:
+        file_path: The table's file.
+        format: "csv" or "parquet". CSV columns are read as text.
+
+    Returns:
+        The table, or an empty DataFrame for an empty CSV file.
+    """
+    return _load_table(file_path, format)
+
+
+def table_column(file_path: Path, format: FileFormat, column: str) -> pd.Series | None:
+    """Read one column of a table file without loading the rest
+
+    Args:
+        file_path: The table's file.
+        format: "csv" or "parquet".
+        column: Column to read.
+
+    Returns:
+        The column, or None if the file has no such column.
+    """
+    if format == "csv":
+        try:
+            header = pd.read_csv(file_path, nrows=0).columns
+        except pd.errors.EmptyDataError:
+            return None
+        if column not in header:
+            return None
+        return pd.read_csv(file_path, usecols=[column], **_CSV_TEXT_READ_PARAMS)[column]
+    if column not in pq.read_schema(file_path).names:
+        return None
+    return pd.read_parquet(file_path, columns=[column])[column]
+
+
 def _load_table(file_path: Path, format: FileFormat) -> pd.DataFrame:
     """Load a single table file."""
     if format == "csv":

@@ -23,7 +23,7 @@ from utils.ids import load_id_mapping, save_id_mapping
 from utils.io import load_database, save_database, staged_directory
 from utils.link.predict import run_linkage_pipeline
 from utils.link.train import train_splink
-from utils.normalize import Normalizer
+from utils.normalize import Normalizer, combine_duplicates_across_chunks
 from utils.standardize import standardize_state
 
 COERCED_VALUES_REPORT_NAME = "coerced_values.csv"
@@ -72,8 +72,10 @@ def run_standardize(args: argparse.Namespace) -> int:
 def run_normalize(args: argparse.Namespace) -> int:
     """Command entry point for normalizing standardized data
 
-    Each chunk is normalized and appended to a staging folder, which replaces
-    the state's folder after the last chunk (see utils.io.staged_directory).
+    Each chunk is normalized and appended to a staging folder. After the last
+    chunk, duplicates that span chunks are removed (see
+    utils.normalize.combine_duplicates_across_chunks), and the staging folder
+    replaces the state's folder (see utils.io.staged_directory).
     """
     # Process database in chunks (a chunk may be all data)
     database_chunks = load_database(
@@ -111,13 +113,15 @@ def run_normalize(args: argparse.Namespace) -> int:
             save_id_mapping(accumulated_id_mapping, id_mapping_file)
 
             first_chunk = False
+        combine_duplicates_across_chunks(staging, args.output_format, args.schema)
     return 0
 
 
 def run_clean(args: argparse.Namespace) -> int:
     """Command entry point for cleaning normalized data
 
-    Written to a staging folder like run_normalize.
+    Written to a staging folder like run_normalize, with duplicates that span
+    chunks removed at the end.
     """
     database_chunks = load_database(
         args.input_directory / args.state,
@@ -136,6 +140,7 @@ def run_clean(args: argparse.Namespace) -> int:
                 mode=save_mode,
             )
             first_chunk = False
+        combine_duplicates_across_chunks(staging, args.output_format, args.schema)
     return 0
 
 
