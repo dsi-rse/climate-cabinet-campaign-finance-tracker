@@ -5,6 +5,8 @@ import re
 import nameparser
 import pandas as pd
 
+from utils.normalize import combine_rows_sharing_an_id
+
 # Words that mark a name as an organization's. Each is matched as a whole
 # word, ignoring case, so "inc" matches "Acme Inc" but not "Vincent", and
 # "pac" matches "Friends of Bob PAC" but not "Spacek".
@@ -40,13 +42,12 @@ def _clean_name_components(
         name_components: A dictionary with keys: prefix, first_name, middle_name, last_name, suffix, nickname
 
     """
-    # remove non standard name characters
-    # (only letters, spaces, hyphens, and apostrophes)
+    # keep letters in any alphabet ("José", "Nuñez"), spaces, hyphens and
+    # apostrophes; drop digits, underscores and other symbols
     for key, value in name_components.items():
         if value is not None:
-            name_components[key] = re.sub(r"[^a-zA-Z\s'-]", "", value)
-        if value == "":
-            name_components[key] = None
+            value = re.sub(r"[^\w\s'\u2019-]|[\d_]", "", value)
+        name_components[key] = value or None
     return name_components
 
 
@@ -83,7 +84,14 @@ def divide_full_name_nameparser(full_name: str) -> dict[str, str | None]:
 
 
 def clean_individuals_names(names: pd.DataFrame) -> pd.DataFrame:
-    """Attempt to properly parse names into components
+    """Fill in missing name parts by parsing the full name
+
+    Name parts the state supplied are never replaced:
+    - if both first_name and last_name are missing, every missing part
+      (first, middle, last, prefix, suffix, preferred) is filled from the
+      parsed full_name
+    - if only one of them is missing, only that one is filled, so a supplied
+      first name like "Mary Ann" isn't split into first and middle names
 
     Args:
         names: A dataframe with columns:
@@ -91,9 +99,7 @@ def clean_individuals_names(names: pd.DataFrame) -> pd.DataFrame:
             name_suffix, name_preferred
 
     Returns:
-        pd.DataFrame: A dataframe with columns:
-            full_name, first_name, middle_name, last_name, name_prefix,
-            name_suffix, name_preferred
+        pd.DataFrame: names with missing parts filled in.
     """
     names = names.copy()
     if names.empty:
@@ -108,18 +114,20 @@ def clean_individuals_names(names: pd.DataFrame) -> pd.DataFrame:
     names.loc[likely_full_names, "full_name"] = names.loc[
         likely_full_names, "last_name"
     ]
-    # use a name parser to get components of full names where they are
-    # not already provided
-    missing_name_parts = names["full_name"].notna() & (
-        names["first_name"].isna() | names["last_name"].isna()
-    )
+    first_missing = names["first_name"].isna().to_numpy()
+    last_missing = names["last_name"].isna().to_numpy()
+    to_parse = names["full_name"].notna().to_numpy() & (first_missing | last_missing)
+    if not to_parse.any():
+        return names
 
-    # divide full names into components
-    name_components = names[missing_name_parts]["full_name"].apply(
-        divide_full_name_nameparser,  # result_type="expand"
+    parsed = pd.DataFrame(
+        [divide_full_name_nameparser(name) for name in names["full_name"][to_parse]]
     )
-
-    name_components = pd.DataFrame(name_components.tolist())
+    # positions within the parsed rows; matched by position because the
+    # table's index can repeat labels
+    both_missing = (first_missing & last_missing)[to_parse]
+    only_first_missing = (first_missing & ~last_missing)[to_parse]
+    only_last_missing = (last_missing & ~first_missing)[to_parse]
     name_columns = [
         "first_name",
         "middle_name",
@@ -128,10 +136,17 @@ def clean_individuals_names(names: pd.DataFrame) -> pd.DataFrame:
         "name_suffix",
         "name_preferred",
     ]
-    for col in name_columns:
-        if col in name_components.columns:
-            names.loc[missing_name_parts, col] = name_components[col].to_numpy()
-
+    for column in name_columns:
+        current = names[column].to_numpy(dtype=object)[to_parse]
+        fill = pd.isna(current) & both_missing
+        if column == "first_name":
+            fill |= only_first_missing
+        elif column == "last_name":
+            fill |= only_last_missing
+        current[fill] = parsed[column].to_numpy(dtype=object)[fill]
+        values = names[column].to_numpy(dtype=object).copy()
+        values[to_parse] = current
+        names[column] = values
     return names
 
 
@@ -205,7 +220,8 @@ def clean_transactors(transactors: pd.DataFrame) -> pd.DataFrame:
             full_name, first_name, middle_name, last_name, name_prefix,
             name_suffix, name_preferred, phone_number
     """
-    transactors = transactors.drop_duplicates(subset=["id"], keep="first")
+    # combine rows sharing an id, keeping each column's first non-null value
+    transactors = combine_rows_sharing_an_id(transactors, "Transactor")
     # fill in transactor types
     transactors = fill_in_transactor_types(transactors)
     transactors = clean_names(transactors)

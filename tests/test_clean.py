@@ -2,7 +2,14 @@
 
 import pandas as pd
 import pytest
-from utils.clean.transactor import divide_full_name_nameparser, fill_in_transactor_types
+from utils.clean.address import clean_address
+from utils.clean.transactor import (
+    _clean_name_components,
+    clean_individuals_names,
+    clean_transactors,
+    divide_full_name_nameparser,
+    fill_in_transactor_types,
+)
 
 
 @pytest.mark.parametrize(
@@ -226,3 +233,161 @@ def test_a_type_the_state_supplied_is_never_changed(supplied_type):
     table = fill_in_transactor_types(transactors(names, supplied_type))
     assert set(table["transactor_type"]) == {supplied_type}
     assert not table["transactor_type_inferred"].any()
+
+
+NAME_COLUMNS = [
+    "full_name",
+    "first_name",
+    "middle_name",
+    "last_name",
+    "name_prefix",
+    "name_suffix",
+    "name_preferred",
+]
+
+
+def names_table(rows: list[dict]) -> pd.DataFrame:
+    """Build a names table, with missing name parts as None
+
+    Args:
+        rows: One dict of name parts per row.
+
+    Returns:
+        A table with every column in NAME_COLUMNS.
+    """
+    return pd.DataFrame(rows, columns=NAME_COLUMNS).astype(object)
+
+
+def name_parts(table: pd.DataFrame, columns: list[str]) -> list[dict]:
+    """List some name parts per row, with missing values as None
+
+    Args:
+        table: Names table.
+        columns: Columns to list.
+
+    Returns:
+        One dict per row.
+    """
+    values = table[columns].astype(object)
+    return values.where(values.notna(), None).to_dict("records")
+
+
+def test_supplied_name_parts_are_kept_and_only_the_missing_one_filled():
+    """A supplied first name isn't split up when only the last name is missing"""
+    table = clean_individuals_names(
+        names_table(
+            [
+                {"full_name": "Mary Ann Smith", "first_name": "Mary Ann"},
+                {"full_name": "Smith, John Q", "last_name": "Smith-Jones"},
+            ]
+        )
+    )
+    assert name_parts(table, ["first_name", "middle_name", "last_name"]) == [
+        {"first_name": "Mary Ann", "middle_name": None, "last_name": "Smith"},
+        {"first_name": "John", "middle_name": None, "last_name": "Smith-Jones"},
+    ]
+
+
+def test_all_missing_parts_are_filled_when_first_and_last_are_missing():
+    """With no first or last name, the full name fills every missing part"""
+    table = clean_individuals_names(
+        names_table([{"full_name": "Dr. Jane Q. Public Jr.", "name_prefix": "Rev."}])
+    )
+    assert name_parts(table, NAME_COLUMNS[1:]) == [
+        {
+            "first_name": "Jane",
+            "middle_name": "Q",
+            "last_name": "Public",
+            "name_prefix": "Rev.",  # supplied, so kept
+            "name_suffix": "Jr",
+            "name_preferred": None,
+        }
+    ]
+
+
+def test_accented_letters_are_kept():
+    """Parsing keeps letters in any alphabet and curly apostrophes"""
+    table = clean_individuals_names(
+        names_table([{"full_name": "José Nuñez-García"}, {"full_name": "Zoë O’Brien"}])
+    )
+    assert name_parts(table, ["first_name", "last_name"]) == [
+        {"first_name": "José", "last_name": "Nuñez-García"},
+        {"first_name": "Zoë", "last_name": "O’Brien"},
+    ]
+
+
+def test_digits_and_symbols_are_dropped_from_parsed_name_parts():
+    """Digits and symbols are removed, and a part left empty becomes None"""
+    assert _clean_name_components(
+        {"first_name": "Ann3", "last_name": "O'Neil_!", "name_suffix": "42"}
+    ) == {"first_name": "Ann", "last_name": "O'Neil", "name_suffix": None}
+
+
+def test_parsed_address_parts_fill_gaps_without_replacing_supplied_values():
+    """Supplied city, state and zip are kept; unit and PO box reach the schema"""
+    addresses = pd.DataFrame(
+        {
+            "full_address": [
+                "123 N Main St Apt 4B, Chicago, IL 60601",
+                "PO Box 77, Springfield, IL 62701-1234",
+            ],
+            "line_1": None,
+            "line_2": None,
+            "city": ["CHICAGO", None],
+            "state": [None, None],
+            "zipcode": ["60602", None],
+        }
+    )
+    cleaned = clean_address(addresses)
+    columns = [
+        "city",
+        "state",
+        "zipcode",
+        "street_name",
+        "secondary_address_identifier",
+        "secondary_address_number",
+        "po_box",
+    ]
+    values = cleaned[columns].astype(object)
+    assert values.where(values.notna(), None).to_dict("records") == [
+        {
+            "city": "CHICAGO",  # supplied
+            "state": "IL",  # parsed, written like states write it
+            "zipcode": "60602",  # supplied, though the address says 60601
+            "street_name": "main",
+            "secondary_address_identifier": "apartment",
+            "secondary_address_number": "4b",
+            "po_box": None,
+        },
+        {
+            "city": "Springfield",
+            "state": "IL",
+            "zipcode": "62701",
+            "street_name": None,
+            "secondary_address_identifier": None,
+            "secondary_address_number": None,
+            "po_box": "77",
+        },
+    ]
+
+
+def test_rows_sharing_an_id_keep_values_from_every_row():
+    """A phone number on the second row for an id isn't thrown away"""
+    table = pd.DataFrame(
+        {
+            "id": ["u1", "u1"],
+            "full_name": ["Jane Doe", "Jane Doe"],
+            "first_name": [None, None],
+            "middle_name": None,
+            "last_name": None,
+            "name_prefix": None,
+            "name_suffix": None,
+            "name_preferred": None,
+            "transactor_type": ["Individual", "Individual"],
+            "phone_number": [None, "312-555-1212"],
+        }
+    )
+    cleaned = clean_transactors(table)
+    assert cleaned[["id", "phone_number", "first_name"]].to_dict("records") == [
+        {"id": "u1", "phone_number": "3125551212", "first_name": "Jane"}
+    ]

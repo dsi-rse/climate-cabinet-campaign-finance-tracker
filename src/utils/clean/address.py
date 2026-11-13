@@ -153,8 +153,19 @@ def parse_usaddress_simple_expand(address_row: pd.Series) -> dict:
     return parsed
 
 
+# How a parsed value is written when it fills a gap in a column the state
+# also supplies, to match how states write them ("Chicago", "IL"). Parsed
+# parts are lowercased so they can be looked up in utils.clean.mappings.
+_PARSED_VALUE_CASE = {"city": str.title, "state": str.upper}
+
+
 def clean_address(address_df: pd.DataFrame) -> pd.DataFrame:
     """Clean an address dataframe.
+
+    Each address is parsed with usaddress. Parsed parts fill only values the
+    state left missing: a supplied city, state or zip is never replaced.
+    Parts the state doesn't supply (street name, unit, PO box, ...) go to
+    their own schema columns.
 
     Args:
         address_df: A DataFrame containing address columns.
@@ -164,8 +175,6 @@ def clean_address(address_df: pd.DataFrame) -> pd.DataFrame:
         pd.DataFrame: A DataFrame with cleaned address components.
     """
     address_df["full_address"] = address_df["full_address"].apply(clean_address_string)
-    if "zipcode" in address_df.columns:
-        address_df["zipcode"] = address_df["zipcode"].apply(clean_zipcode)
 
     expanded_addresses_df = address_df.apply(
         parse_usaddress_simple_expand, axis=1, result_type="expand"
@@ -174,9 +183,9 @@ def clean_address(address_df: pd.DataFrame) -> pd.DataFrame:
     address_part_name_mapping = {
         "Recipient": "recipient",
         "BuildingName": "building_name",
-        "USPSBoxType": "usps_box_type",
-        "USPSBoxID": "usps_box_id",
-        # Don't use: "USPSBoxGroupType",  "USPSBoxGroupID"
+        # the box number; the type ("PO Box") is implied by the column
+        "USPSBoxID": "po_box",
+        # Don't use: "USPSBoxType", "USPSBoxGroupType",  "USPSBoxGroupID"
         # Line 1
         "AddressNumber": "building_number",
         "StreetName": "street_name",
@@ -184,9 +193,9 @@ def clean_address(address_df: pd.DataFrame) -> pd.DataFrame:
         "StreetNamePostDirectional": "street_postdirectional",
         "StreetNamePreType": "street_pre_type",
         "StreetNamePostType": "street_post_type",
-        # Line 2
-        "OccupancyType": "occupancy_type",
-        "OccupancyIdentifier": "occupancy_identifier",
+        # Line 2: the unit type ("apartment", "suite") and number ("4b")
+        "OccupancyType": "secondary_address_identifier",
+        "OccupancyIdentifier": "secondary_address_number",
         # Line 3
         "PlaceName": "city",
         "StateName": "state",
@@ -204,10 +213,17 @@ def clean_address(address_df: pd.DataFrame) -> pd.DataFrame:
         columns=address_part_name_mapping
     )
 
-    # For columns in both, use parsed_address_columns value if notna, else address_df
+    # Keep what the state supplied; parsed values only fill missing ones
     for col in expanded_addresses_df.columns:
+        parsed_values = expanded_addresses_df[col]
+        if col in _PARSED_VALUE_CASE:
+            parsed_values = parsed_values.map(
+                _PARSED_VALUE_CASE[col], na_action="ignore"
+            )
         if col in address_df.columns:
-            address_df[col] = expanded_addresses_df[col].combine_first(address_df[col])
+            address_df[col] = address_df[col].combine_first(parsed_values)
         else:
-            address_df[col] = expanded_addresses_df[col]
+            address_df[col] = parsed_values
+    if "zipcode" in address_df.columns:
+        address_df["zipcode"] = address_df["zipcode"].apply(clean_zipcode)
     return address_df
