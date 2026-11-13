@@ -17,6 +17,16 @@ STREETS = ["main st", "oak ave", "elm rd", "pine ct", "lake dr"]
 # people reported twice under different ids, so linkage should merge them
 DUPLICATED_PEOPLE = 40
 THRESHOLD = 0.9
+# organizations added to the linkage database: id, name, state
+ORGANIZATIONS = [
+    ("o1", "Acme Inc.", "tx"),
+    ("o2", "ACME, Inc", "tx"),
+    ("o3", "The Acme Corporation", "tx"),
+    ("o4", "Acme Inc", "pa"),  # another state
+    ("o5", "Inc.", "tx"),  # nothing left to compare once "Inc" is dropped
+    ("o6", "Acme Widgets LLC", "tx"),  # a different name
+]
+TRANSACTOR_COUNT = 300 + DUPLICATED_PEOPLE + len(ORGANIZATIONS)
 
 
 def fake_transactors() -> pd.DataFrame:
@@ -81,7 +91,11 @@ def database_path(tmp_path):
         Path to the database.
     """
     path = tmp_path / "linked.duckdb"
-    transactors = fake_transactors()
+    organizations = pd.DataFrame(
+        ORGANIZATIONS, columns=["id", "full_name", "reported_state"]
+    ).assign(transactor_type="Organization")
+    transactors = pd.concat([fake_transactors(), organizations], ignore_index=True)
+    transactors = transactors.astype("string")
     transactions = pd.DataFrame(
         {
             "donor_id": transactors["id"],
@@ -181,7 +195,7 @@ def test_duplicates_are_linked_and_each_merge_has_its_evidence(
     mapping = read(database_path, "SELECT * FROM linkage_mapping")
     canonical = dict(zip(mapping["old_id"], mapping["canonical_id"]))
     # every transactor is mapped, and the copies of a person share a cluster
-    assert len(canonical) == 340
+    assert len(canonical) == TRANSACTOR_COUNT
     linked_copies = sum(
         canonical[f"t{i:03d}"] == canonical[f"t{300 + i:03d}"]
         for i in range(DUPLICATED_PEOPLE)
@@ -233,9 +247,12 @@ def test_each_run_is_kept_and_the_mapping_view_shows_the_latest(
         database_path,
         "SELECT run_id, count(*) AS n FROM linkage_mapping_history GROUP BY run_id",
     )
-    assert dict(zip(history["run_id"], history["n"])) == {first: 340, second: 340}
+    assert dict(zip(history["run_id"], history["n"])) == {
+        first: TRANSACTOR_COUNT,
+        second: TRANSACTOR_COUNT,
+    }
     latest = read(database_path, "SELECT count(*) AS n FROM linkage_mapping")
-    assert latest["n"].iloc[0] == 340
+    assert latest["n"].iloc[0] == TRANSACTOR_COUNT
     assert read(database_path, "SELECT count(*) AS n FROM linkage_run")["n"][0] == 2
 
 
@@ -268,3 +285,32 @@ def test_splink_working_tables_are_dropped(database_path, model_path):
     run_linkage(database_path, model_path)
     tables = read(database_path, "SELECT table_name FROM information_schema.tables")
     assert not [name for name in tables["table_name"] if name.startswith("__splink__")]
+
+
+def test_organizations_with_matching_names_in_one_state_are_linked(
+    database_path, model_path
+):
+    """Organizations match on name, ignoring case, punctuation and "Inc"
+
+    Args:
+        database_path: Database with Transactor and Transaction tables.
+        model_path: The trained model.
+    """
+    run_linkage(database_path, model_path)
+    rows = read(
+        database_path,
+        "SELECT old_id, canonical_id, method FROM linkage_mapping_history"
+        " WHERE starts_with(old_id, 'o') ORDER BY old_id",
+    )
+    linked = {
+        old_id: (canonical_id, method if pd.notna(method) else None)
+        for old_id, canonical_id, method in rows.itertuples(index=False)
+    }
+    assert linked == {
+        "o1": ("o1", None),
+        "o2": ("o1", "organization_name"),
+        "o3": ("o1", "organization_name"),
+        "o4": ("o4", None),
+        "o5": ("o5", None),
+        "o6": ("o6", None),
+    }

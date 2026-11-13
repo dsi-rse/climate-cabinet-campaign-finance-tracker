@@ -177,3 +177,64 @@ def test_create_transactor_detailed_view_is_idempotent(con, tiny_duckdb):
     second = con.execute("SELECT COUNT(*) FROM transactor_detailed_view").fetchone()[0]
 
     assert first == second
+
+
+def test_tied_addresses_are_picked_whole_and_the_same_way_every_time(con):
+    """With two equally common addresses, one whole address is picked, consistently
+
+    Args:
+        con: DuckDB connection to an empty database.
+    """
+    con.execute("CREATE TABLE Transactor (id VARCHAR, first_name VARCHAR)")
+    con.execute(
+        "CREATE TABLE Membership (member_id VARCHAR, organization_id VARCHAR,"
+        " membership_type VARCHAR)"
+    )
+    con.execute(
+        "CREATE TABLE Address (transactor_id VARCHAR, street_name VARCHAR,"
+        " city VARCHAR, latest_known_date DATE)"
+    )
+    con.execute("INSERT INTO Transactor VALUES ('p1', 'Ann'), ('p2', 'Bob')")
+    con.execute(
+        """
+        INSERT INTO Address VALUES
+            ('p1', 'oak ave', 'Austin', NULL),
+            ('p1', 'main st', 'Reno',   NULL),
+            ('p2', 'elm rd',  'Denver', DATE '2020-01-01'),
+            ('p2', 'pine ct', 'Boise',  DATE '2024-01-01')
+        """
+    )
+    picks = []
+    for _ in range(3):
+        create_transactor_detailed_view(con)
+        picks.append(
+            con.execute(
+                "SELECT id, address_street_name, address_city"
+                " FROM transactor_detailed_view ORDER BY id"
+            ).fetchall()
+        )
+    # p1: no dates, so alphabetical; p2: the latest address
+    assert picks == [[("p1", "main st", "reno"), ("p2", "pine ct", "boise")]] * 3
+
+
+def test_compared_text_columns_are_lowercased(con):
+    """Names and address fields linkage compares are lowercased and trimmed
+
+    Args:
+        con: DuckDB connection to an empty database.
+    """
+    con.execute(
+        "CREATE TABLE Transactor (id VARCHAR, first_name VARCHAR, last_name VARCHAR,"
+        " party VARCHAR)"
+    )
+    con.execute(
+        "CREATE TABLE Membership (member_id VARCHAR, organization_id VARCHAR,"
+        " membership_type VARCHAR)"
+    )
+    con.execute("CREATE TABLE Address (transactor_id VARCHAR, city VARCHAR)")
+    con.execute("INSERT INTO Transactor VALUES ('p1', ' ANN ', 'Smith', 'Democrat')")
+    con.execute("INSERT INTO Address VALUES ('p1', 'CHICAGO')")
+    create_transactor_detailed_view(con)
+    assert con.execute(
+        "SELECT first_name, last_name, address_city, party FROM transactor_detailed_view"
+    ).fetchall() == [("ann", "smith", "chicago", "Democrat")]

@@ -1,6 +1,7 @@
 """Database utilities."""
 
 from pathlib import Path
+from textwrap import dedent
 
 import duckdb
 
@@ -290,9 +291,73 @@ def create_database_from_nested_parquet_directories(
     return con
 
 
+# Text columns of the detailed view that linkage compares. They are
+# lowercased and trimmed, so "SMITH" and "Smith " compare as equal.
+LINKAGE_TEXT_COLUMNS = (
+    "full_name",
+    "first_name",
+    "middle_name",
+    "last_name",
+    "name_prefix",
+    "name_suffix",
+    "address_city",
+    "address_street_name",
+    "employer_full_name",
+    "employer_role",
+)
+
+
+def _most_common_row(key: str, source_sql: str, columns: list[str]) -> str:
+    """Build SQL that picks each key's most common row, the same way every time
+
+    Rows are counted per key and combination of columns. The most common
+    combination wins; ties go to the latest latest_known_date (if it is one
+    of the columns), then to the values in alphabetical order. The whole row
+    comes from one combination, so a city and street are never mixed from
+    two addresses.
+
+    Args:
+        key: Column to pick one row for each value of, such as transactor_id.
+        source_sql: Query giving key and columns.
+        columns: Columns to pick.
+
+    Returns:
+        A query with one row per key: key and columns.
+    """
+    if not columns:
+        return f"SELECT DISTINCT {key} FROM ({source_sql}) source"
+    column_list = ", ".join(columns)
+    tie_breakers = ["COUNT(*) DESC"]
+    if "latest_known_date" in columns:
+        tie_breakers.append("latest_known_date DESC NULLS LAST")
+    tie_breakers += [f"{column} ASC NULLS LAST" for column in columns]
+    return dedent(f"""
+        SELECT {key}, {column_list}
+        FROM (
+            SELECT
+                {key}, {column_list},
+                ROW_NUMBER() OVER (
+                    PARTITION BY {key} ORDER BY {", ".join(tie_breakers)}
+                ) AS row_rank
+            FROM ({source_sql}) source
+            GROUP BY {key}, {column_list}
+        ) ranked
+        WHERE row_rank = 1
+    """).strip()
+
+
 def create_transactor_detailed_view(con: duckdb.DuckDBPyConnection) -> None:
-    """Create or replace a persistent table of transactor data with employment and address details."""
-    from textwrap import dedent
+    """Create or replace a table of transactors with their employer and address
+
+    Each transactor gets its most common employer (from Employee memberships)
+    and its most common address, picked as in _most_common_row, with the
+    employer's columns prefixed employer_ and the address's address_. The
+    text columns linkage compares (LINKAGE_TEXT_COLUMNS) are lowercased and
+    trimmed.
+
+    Args:
+        con: DuckDB connection with Transactor, Membership and Address tables.
+    """
 
     def _cols(table: str, exclude: set[str]) -> list[str]:
         """Return column names for a DuckDB `table` excluding `exclude`."""
@@ -302,125 +367,49 @@ def create_transactor_detailed_view(con: duckdb.DuckDBPyConnection) -> None:
             if col[1] not in exclude
         ]
 
-    def _csv(cols: list[str]) -> str:
-        """Return columns joined by ', '."""
-        return ", ".join(cols)
-
-    def _csv_prefixed(prefix: str, cols: list[str]) -> str:
-        """Return columns as 'prefix.col' joined by ', '."""
-        return ", ".join(f"{prefix}.{c}" for c in cols)
-
-    def _select_with_alias(alias: str, cols: list[str], out_prefix: str) -> str:
-        """Return a multiline SELECT fragment 'alias.col AS out_prefix_col' joined by commas."""
-        return ",\n            ".join(f"{alias}.{c} AS {out_prefix}_{c}" for c in cols)
-
-    def _any_value_on_max(cols: list[str]) -> str:
-        """Return aggregations 'any_value(col) FILTER (WHERE cnt = max_cnt) AS col' joined by commas."""
-        return ", ".join(
-            f"any_value({c}) FILTER (WHERE cnt = max_cnt) AS {c}" for c in cols
-        )
-
-    membership_columns = _cols("Membership", {"member_id", "organization_id"})
     transactor_columns = _cols("Transactor", {"id"})
+    # a column in both (reported_state) is taken from the employer itself
+    membership_columns = _cols(
+        "Membership", {"member_id", "organization_id", *transactor_columns}
+    )
     address_columns = _cols("Address", {"transactor_id"})
+    employer_columns = membership_columns + transactor_columns
 
-    membership_select_clause = (
-        _select_with_alias("employer_data", membership_columns, "employer")
-        if membership_columns
-        else ""
+    employer_source = (
+        "SELECT Membership.member_id"
+        + "".join(
+            [f", Membership.{column}" for column in membership_columns]
+            + [f", Transactor.{column}" for column in transactor_columns]
+        )
+        + dedent("""
+        FROM Membership
+        JOIN Transactor ON Membership.organization_id = Transactor.id
+        WHERE Membership.membership_type = 'Employee'
+    """)
     )
-    employer_select_clause = (
-        _select_with_alias("employer_data", transactor_columns, "employer")
-        if transactor_columns
-        else ""
+    employer_subquery = _most_common_row("member_id", employer_source, employer_columns)
+    address_source = (
+        "SELECT transactor_id"
+        + "".join(f", {column}" for column in address_columns)
+        + " FROM Address"
     )
-    address_select_clause = (
-        _select_with_alias("address_data", address_columns, "address")
-        if address_columns
-        else ""
+    address_subquery = _most_common_row(
+        "transactor_id", address_source, address_columns
     )
 
     select_parts = ["t.*"]
-    if membership_select_clause:
-        select_parts.append(membership_select_clause)
-    if employer_select_clause:
-        select_parts.append(employer_select_clause)
-    if address_select_clause:
-        select_parts.append(address_select_clause)
-
-    # Employer subquery components (built safely to avoid stray commas when lists are empty)
-    employer_outer_cols = ["member_id"]
-    if membership_columns:
-        employer_outer_cols.append(_any_value_on_max(membership_columns))
-    if transactor_columns:
-        employer_outer_cols.append(_any_value_on_max(transactor_columns))
-
-    employer_inner_cols = ["member_id"]
-    if membership_columns:
-        employer_inner_cols.append(_csv(membership_columns))
-    if transactor_columns:
-        employer_inner_cols.append(_csv(transactor_columns))
-
-    employer_group_by_cols = ["member_id"]
-    if membership_columns:
-        employer_group_by_cols.append(_csv(membership_columns))
-    if transactor_columns:
-        employer_group_by_cols.append(_csv(transactor_columns))
-
-    employer_subquery = dedent(f"""
-        SELECT
-            {", ".join(employer_outer_cols)}
-        FROM (
-            SELECT
-                {", ".join(employer_inner_cols)},
-                COUNT(*) AS cnt,
-                MAX(COUNT(*)) OVER (PARTITION BY member_id) AS max_cnt
-            FROM (
-                SELECT
-                    Membership.member_id
-                    {(", " + _csv_prefixed("Membership", membership_columns)) if membership_columns else ""}
-                    {(", " + _csv_prefixed("Transactor", transactor_columns)) if transactor_columns else ""}
-                FROM Membership
-                JOIN Transactor ON Membership.organization_id = Transactor.id
-                WHERE Membership.membership_type = 'Employee'
-            ) joined_data
-            GROUP BY {", ".join(employer_group_by_cols)}
-        ) subq
-        WHERE cnt = max_cnt
-        GROUP BY member_id
-    """).strip()
-
-    # Address subquery
-    address_outer_cols = ["transactor_id"]
-    if address_columns:
-        address_outer_cols.append(_any_value_on_max(address_columns))
-
-    address_inner_cols = ["transactor_id"]
-    if address_columns:
-        address_inner_cols.append(_csv(address_columns))
-
-    address_group_by_cols = ["transactor_id"]
-    if address_columns:
-        address_group_by_cols.append(_csv(address_columns))
-
-    address_subquery = dedent(f"""
-        SELECT
-            {", ".join(address_outer_cols)}
-        FROM (
-            SELECT
-                {", ".join(address_inner_cols)},
-                COUNT(*) AS cnt,
-                MAX(COUNT(*)) OVER (PARTITION BY transactor_id) AS max_cnt
-            FROM Address
-            GROUP BY {", ".join(address_group_by_cols)}
-        ) subq
-        WHERE cnt = max_cnt
-        GROUP BY transactor_id
-    """).strip()
+    select_parts += [
+        f"employer_data.{column} AS employer_{column}" for column in employer_columns
+    ]
+    select_parts += [
+        f"address_data.{column} AS address_{column}" for column in address_columns
+    ]
+    select_list = ",\n            ".join(select_parts)
     table_name = DETAILED_VIEW_TABLE
     con.execute(f"DROP TABLE IF EXISTS {table_name}")
-    select_list = ",\n            ".join(select_parts)
-    sql_select = dedent(f"""
+    con.execute(
+        dedent(f"""
+        CREATE TABLE {table_name} AS
         SELECT
             {select_list}
         FROM Transactor t
@@ -429,7 +418,19 @@ def create_transactor_detailed_view(con: duckdb.DuckDBPyConnection) -> None:
         LEFT JOIN ({address_subquery}) address_data
             ON t.id = address_data.transactor_id
     """)
-    con.execute(f"CREATE TABLE {table_name} AS {sql_select}")
+    )
+    text_columns = [
+        name
+        for _, name, column_type, *_ in con.execute(
+            f"PRAGMA table_info('{table_name}')"
+        ).fetchall()
+        if name in LINKAGE_TEXT_COLUMNS and column_type == "VARCHAR"
+    ]
+    if text_columns:
+        assignments = ", ".join(
+            f"{column} = lower(trim({column}))" for column in text_columns
+        )
+        con.execute(f"UPDATE {table_name} SET {assignments}")
 
 
 def create_transactor_details_view_from_parquet(

@@ -8,7 +8,17 @@ tables, so every merge can be checked or undone:
 - linkage_prediction: every pair of records the model scored at or above the
   threshold, with its match probability and weight
 - linkage_mapping_history: for every record in the run, the canonical id of
-  the cluster it belongs to (a record in no cluster maps to itself)
+  the cluster it belongs to (a record in no cluster maps to itself), and how
+  it was linked
+
+Two methods link records:
+
+- splink: the trained model, which compares individuals by name, address and
+  employer
+- organization_name: organizations the model can't compare (they have no
+  first name to block on) are linked when they are in the same state and
+  their names match once case, punctuation and legal endings like "Inc" or
+  "LLC" are ignored (see ORGANIZATION_NAME_KEY_SQL)
 
 On top of these:
 
@@ -63,10 +73,36 @@ _CREATE_LINKAGE_TABLES = f"""
         run_id VARCHAR,
         old_id VARCHAR,
         canonical_id VARCHAR,
-        -- how old_id was linked: 'splink', or NULL if it is its own cluster
+        -- how old_id was linked to canonical_id: 'splink' or
+        -- 'organization_name', or NULL if it is the canonical record itself
         method VARCHAR
     );
 """
+
+# Words dropped from organization names before comparing them, so "Acme Inc"
+# and "ACME, Inc." match
+ORGANIZATION_NAME_STOP_WORDS = (
+    "the",
+    "inc",
+    "incorporated",
+    "llc",
+    "llp",
+    "ltd",
+    "co",
+    "corp",
+    "corporation",
+    "company",
+)
+# SQL giving an organization's comparison key from full_name: lowercased,
+# punctuation replaced by spaces (letters in any alphabet and digits kept),
+# stop words removed, and spaces collapsed
+ORGANIZATION_NAME_KEY_SQL = (
+    "trim(regexp_replace(regexp_replace(regexp_replace(lower(full_name),"
+    " '[^\\pL\\pN]+', ' ', 'g'),"
+    f" '\\b({'|'.join(ORGANIZATION_NAME_STOP_WORDS)})\\b', ' ', 'g'),"
+    " '\\s+', ' ', 'g'))"
+)
+_ORGANIZATION_COLUMNS = {"id", "full_name", "transactor_type", "reported_state"}
 
 # Splink helpers
 
@@ -182,6 +218,43 @@ def create_canonical_views(con: duckdb.DuckDBPyConnection) -> None:
         """)
 
 
+def _organization_groups_sql(con: duckdb.DuckDBPyConnection, table_name: str) -> str:
+    """Build SQL grouping organizations by state and comparison key
+
+    Args:
+        con: DuckDB connection.
+        table_name: Table linkage ran on.
+
+    Returns:
+        A query with id, org_canonical_id (the smallest id in its group) and
+        group_size, for organizations with a non-empty key. It has no rows if
+        the table lacks full_name, transactor_type or reported_state.
+    """
+    columns = {
+        row[1] for row in con.execute(f"PRAGMA table_info('{table_name}')").fetchall()
+    }
+    if not _ORGANIZATION_COLUMNS <= columns:
+        return (
+            "SELECT NULL::VARCHAR AS id, NULL::VARCHAR AS org_canonical_id,"
+            " NULL::BIGINT AS group_size WHERE false"
+        )
+    return f"""
+        SELECT
+            id,
+            min(id) OVER (PARTITION BY state, name_key) AS org_canonical_id,
+            count(*) OVER (PARTITION BY state, name_key) AS group_size
+        FROM (
+            SELECT
+                CAST(id AS VARCHAR) AS id,
+                lower(reported_state) AS state,
+                {ORGANIZATION_NAME_KEY_SQL} AS name_key
+            FROM "{table_name}"
+            WHERE transactor_type = 'Organization' AND full_name IS NOT NULL
+        ) keyed
+        WHERE name_key <> ''
+    """
+
+
 def record_linkage_run(
     con: duckdb.DuckDBPyConnection,
     *,
@@ -215,13 +288,31 @@ def record_linkage_run(
             """,
             [run["run_id"]],
         )
+        # an organization in a group of matching names takes the group's id;
+        # every other record takes its Splink cluster's id
         con.execute(
             f"""
+            WITH clusters AS (
+                SELECT DISTINCT
+                    CAST(id AS VARCHAR) AS id,
+                    CAST(cluster_id AS VARCHAR) AS cluster_id
+                FROM {clusters_table}
+            ),
+            organizations AS ({_organization_groups_sql(con, run["table_name"])})
             INSERT INTO {LINKAGE_MAPPING_HISTORY_TABLE}
-            SELECT DISTINCT ?, CAST(id AS VARCHAR), CAST(cluster_id AS VARCHAR),
-                CASE WHEN CAST(cluster_id AS VARCHAR) <> CAST(id AS VARCHAR)
-                    THEN 'splink' END
-            FROM {clusters_table}
+            SELECT
+                ?,
+                c.id,
+                CASE WHEN o.group_size > 1 THEN o.org_canonical_id
+                    ELSE c.cluster_id END,
+                CASE
+                    WHEN o.group_size > 1 AND o.org_canonical_id <> c.id
+                        THEN 'organization_name'
+                    WHEN coalesce(o.group_size, 1) = 1 AND c.cluster_id <> c.id
+                        THEN 'splink'
+                END
+            FROM clusters c
+            LEFT JOIN organizations o USING (id)
             """,
             [run["run_id"]],
         )
