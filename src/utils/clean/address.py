@@ -10,21 +10,36 @@ from utils.clean.mappings import directionals, occupancy_types, street_types
 
 
 def clean_zipcode(val: object) -> str | None:
-    """Convert zipcodes to strings of length 5"""
+    """Convert a zip code to a 5-digit string
+
+    Args:
+        val: A zip code as text or a number, possibly zip+4.
+
+    Returns:
+        The 5-digit zip, or None if val isn't a zip. A zip read as a number
+        loses its leading zeros (00501 becomes 501), so 3- and 4-digit values
+        are padded back to 5.
+    """
     standard_zipcode_length = 5
+    # the shortest zip once leading zeros are lost (00501, Holtsville NY)
+    shortest_numeric_zipcode_length = 3
     if pd.isna(val):
         return None
     # make zipcode a string and if it is zip+4, take just zip.
     # if it was stored as a float, take the integer part.
-    string_zipcode = str(val).split("-")[0].split(".")[0]
+    string_zipcode = str(val).strip().split("-")[0].split(".")[0]
+    if not string_zipcode.isdigit():
+        return None
     if len(string_zipcode) == standard_zipcode_length:
         return string_zipcode
     # zipcode+4 without a dash
     elif len(string_zipcode) == standard_zipcode_length + 4:
         return string_zipcode[:standard_zipcode_length]
-    # zipcode with leading 0 stripped when stored as number
-    elif len(string_zipcode) == standard_zipcode_length - 1:
-        return "0" + string_zipcode
+    # zipcode with leading zeros stripped when stored as number
+    elif (
+        shortest_numeric_zipcode_length <= len(string_zipcode) < standard_zipcode_length
+    ):
+        return string_zipcode.zfill(standard_zipcode_length)
     # unknown zipcode format
     else:
         return None

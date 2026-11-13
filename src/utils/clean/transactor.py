@@ -183,13 +183,25 @@ def fill_in_transactor_types(names: pd.DataFrame) -> pd.DataFrame:
 
 
 def clean_phone_number(val: object) -> str | None:
-    """Convert phone numbers to strings of only digits or None"""
+    """Convert a phone number to a string of only its digits
+
+    A phone number read as a number (3125551212.0) or written from one
+    ("3125551212.0") loses the ".0" first, so it doesn't gain a digit.
+
+    Args:
+        val: A phone number as text or a number.
+
+    Returns:
+        The digits, or None if there are none.
+    """
     if pd.isna(val):
         return None
-    string_phone_number = str(val)
-    # strip non-numeric characters
-    string_phone_number = re.sub(r"\D", "", string_phone_number)
-    return string_phone_number
+    if isinstance(val, float) and val.is_integer():
+        val = int(val)
+    text = str(val).strip()
+    if re.fullmatch(r"\d+\.0+", text):
+        text = text.split(".")[0]
+    return re.sub(r"\D", "", text) or None
 
 
 def clean_names(transactors: pd.DataFrame) -> pd.DataFrame:

@@ -2,14 +2,19 @@
 
 import pandas as pd
 import pytest
-from utils.clean.address import clean_address
+from utils.clean.address import clean_address, clean_zipcode
+from utils.clean.columns import clean_table_columns
 from utils.clean.transactor import (
     _clean_name_components,
     clean_individuals_names,
+    clean_phone_number,
     clean_transactors,
     divide_full_name_nameparser,
     fill_in_transactor_types,
 )
+from utils.constants import DEFAULT_SCHEMA_PATH
+from utils.database import connect_duckdb, create_or_append_parquet_to_db
+from utils.schema import DataSchema
 
 
 @pytest.mark.parametrize(
@@ -391,3 +396,94 @@ def test_rows_sharing_an_id_keep_values_from_every_row():
     assert cleaned[["id", "phone_number", "first_name"]].to_dict("records") == [
         {"id": "u1", "phone_number": "3125551212", "first_name": "Jane"}
     ]
+
+
+def test_win_reads_true_false_and_missing_values_correctly(tmp_path):
+    """ElectionResult.win keeps False and nulls through clean and DuckDB
+
+    Args:
+        tmp_path: Temporary directory for this test (pytest fixture).
+    """
+    schema = DataSchema(DEFAULT_SCHEMA_PATH).schema["ElectionResult"]
+    results = pd.DataFrame(
+        {
+            "id": ["a", "b", "c", "d", "e", "f"],
+            "candidate_id": "c1",
+            "election_id": "e1",
+            "win": pd.Series(["False", None, "TRUE", "n", 1, False], dtype=object),
+        }
+    )
+    cleaned = clean_table_columns(results, schema)
+    assert str(cleaned["win"].dtype) == "boolean"
+    expected = [False, None, True, False, True, False]
+    assert (
+        cleaned["win"].astype(object).where(cleaned["win"].notna(), None).tolist()
+        == expected
+    )
+
+    parquet_path = tmp_path / "ElectionResult.parquet"
+    cleaned.to_parquet(parquet_path)
+    con = connect_duckdb(tmp_path / "test.duckdb")
+    try:
+        create_or_append_parquet_to_db(con, parquet_path)
+        stored = con.execute("SELECT win FROM ElectionResult ORDER BY id").fetchall()
+    finally:
+        con.close()
+    assert [row[0] for row in stored] == expected
+
+
+def test_unreadable_booleans_become_null_with_a_warning():
+    """Text that isn't true or false is reported, not read as True"""
+    schema = DataSchema(DEFAULT_SCHEMA_PATH).schema["ElectionResult"]
+    results = pd.DataFrame(
+        {"id": ["a"], "candidate_id": "c1", "election_id": "e1", "win": ["maybe"]}
+    )
+    with pytest.warns(UserWarning, match="1 values in 'win'.*'maybe'"):
+        cleaned = clean_table_columns(results, schema)
+    assert cleaned["win"].isna().all()
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (3125551212.0, "3125551212"),
+        ("3125551212.0", "3125551212"),
+        ("(312) 555-1212", "3125551212"),
+        ("", None),
+        ("n/a", None),
+        (None, None),
+    ],
+)
+def test_phone_numbers_keep_only_their_own_digits(raw, expected):
+    """A phone read as a number doesn't gain a digit from its ".0"
+
+    Args:
+        raw: Phone number as read.
+        expected: Cleaned phone number.
+    """
+    assert clean_phone_number(raw) == expected
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (501, "00501"),
+        ("501", "00501"),
+        (1234, "01234"),
+        (60601.0, "60601"),
+        ("60601-1234", "60601"),
+        (606011234.0, "60601"),
+        (" 60601 ", "60601"),
+        ("12", None),
+        ("ABCDE", None),
+        (None, None),
+    ],
+)
+def test_zips_that_lost_leading_zeros_are_padded(raw, expected):
+    """Zips read as numbers get their leading zeros back
+
+    Args:
+        raw: Zip code as read.
+        expected: Cleaned zip code.
+    """
+    assert clean_zipcode(raw) == expected
