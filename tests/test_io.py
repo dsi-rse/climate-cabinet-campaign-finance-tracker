@@ -66,6 +66,18 @@ def indexed_database():
     return {"indexed_transactions": transactions}
 
 
+def as_csv_text(table: pd.DataFrame) -> pd.DataFrame:
+    """Write each value as it reads back from CSV, where columns are text
+
+    Args:
+        table: Table that was saved as CSV.
+
+    Returns:
+        The table with every value as the text written to the file.
+    """
+    return table.astype(str)
+
+
 def test_save_and_load_database_csv(tmp_path, sample_database):
     """Test saving and loading database in CSV format."""
     save_database(sample_database, tmp_path, format="csv")
@@ -79,9 +91,11 @@ def test_save_and_load_database_csv(tmp_path, sample_database):
 
     assert set(loaded_db.keys()) == {"transactions", "accounts"}
     pd.testing.assert_frame_equal(
-        loaded_db["transactions"], sample_database["transactions"]
+        loaded_db["transactions"], as_csv_text(sample_database["transactions"])
     )
-    pd.testing.assert_frame_equal(loaded_db["accounts"], sample_database["accounts"])
+    pd.testing.assert_frame_equal(
+        loaded_db["accounts"], as_csv_text(sample_database["accounts"])
+    )
 
 
 def test_save_and_load_database_parquet(tmp_path, sample_database):
@@ -143,7 +157,7 @@ def test_save_database_append_mode_csv(tmp_path):
     # Verify combined result
     loaded_db = next(load_database(tmp_path, format="csv"))
     expected = pd.DataFrame({"id": [1, 2, 3, 4], "value": ["a", "b", "c", "d"]})
-    pd.testing.assert_frame_equal(loaded_db["test_table"], expected)
+    pd.testing.assert_frame_equal(loaded_db["test_table"], as_csv_text(expected))
 
 
 def test_save_database_append_mode_parquet(tmp_path):
@@ -176,7 +190,9 @@ def test_save_database_overwrite_mode(tmp_path):
 
     # Verify only new data exists
     loaded_db = next(load_database(tmp_path, format="csv"))
-    pd.testing.assert_frame_equal(loaded_db["test_table"], new_data["test_table"])
+    pd.testing.assert_frame_equal(
+        loaded_db["test_table"], as_csv_text(new_data["test_table"])
+    )
 
 
 def test_indexed_dataframe_handling(tmp_path, indexed_database):

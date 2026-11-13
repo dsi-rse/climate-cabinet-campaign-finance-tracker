@@ -20,13 +20,14 @@ from utils.database import (
     table_exists,
 )
 from utils.ids import load_id_mapping, save_id_mapping
-from utils.io import load_database, save_database
+from utils.io import load_database, save_database, staged_directory
 from utils.link.predict import run_linkage_pipeline
 from utils.link.train import train_splink
-from utils.normalize import Normalizer
+from utils.normalize import Normalizer, combine_duplicates_across_chunks
 from utils.standardize import standardize_state
 
 COERCED_VALUES_REPORT_NAME = "coerced_values.csv"
+ID_MAPPING_NAME = "id_mapping.tsv"
 
 
 def run_scrape(args: argparse.Namespace) -> int:
@@ -42,7 +43,11 @@ def run_scrape(args: argparse.Namespace) -> int:
 
 
 def run_standardize(args: argparse.Namespace) -> int:
-    """Command entry point for standardizing raw data"""
+    """Command entry point for standardizing raw data
+
+    Output is written to a staging folder and replaces the state's folder only
+    when the step finishes (see utils.io.staged_directory).
+    """
     db, coerced_values = standardize_state(
         args.state, args.start_year, args.end_year, args.input_directory
     )
@@ -50,15 +55,13 @@ def run_standardize(args: argparse.Namespace) -> int:
         f"Standardizing data for {args.state} from {args.input_directory} to {args.output_directory}"
     )
     state_output_directory = Path(args.output_directory) / args.state
-    save_database(
-        db,
-        state_output_directory,
-        format=args.output_format,
-    )
-    # kept in a subfolder so later steps don't load the report as a table
+    with staged_directory(state_output_directory) as staging:
+        save_database(db, staging, format=args.output_format)
+        # kept in a subfolder so later steps don't load the report as a table
+        staged_report_path = staging / "reports" / COERCED_VALUES_REPORT_NAME
+        staged_report_path.parent.mkdir(parents=True, exist_ok=True)
+        coerced_values.to_csv(staged_report_path, index=False)
     report_path = state_output_directory / "reports" / COERCED_VALUES_REPORT_NAME
-    report_path.parent.mkdir(parents=True, exist_ok=True)
-    coerced_values.to_csv(report_path, index=False)
     print(
         f"{int(coerced_values['count'].sum())} raw values became null during"
         f" standardization; distinct values and counts are in {report_path}"
@@ -67,7 +70,13 @@ def run_standardize(args: argparse.Namespace) -> int:
 
 
 def run_normalize(args: argparse.Namespace) -> int:
-    """Command entry point for normalizing standardized data"""
+    """Command entry point for normalizing standardized data
+
+    Each chunk is normalized and appended to a staging folder. After the last
+    chunk, duplicates that span chunks are removed (see
+    utils.normalize.combine_duplicates_across_chunks), and the staging folder
+    replaces the state's folder (see utils.io.staged_directory).
+    """
     # Process database in chunks (a chunk may be all data)
     database_chunks = load_database(
         args.input_directory / args.state,
@@ -75,52 +84,63 @@ def run_normalize(args: argparse.Namespace) -> int:
         chunk_size=args.chunk_size,
     )
     # Load existing ID mappings or start with empty dict
-    id_mapping_file = args.output_directory / args.state / "id_mapping.tsv"
-    accumulated_id_mapping = load_id_mapping(id_mapping_file)
+    state_output_directory = args.output_directory / args.state
+    accumulated_id_mapping = load_id_mapping(state_output_directory / ID_MAPPING_NAME)
 
-    first_chunk = True
-    for chunk_database in tqdm(database_chunks, desc="Processing chunks"):
-        # Create normalizer with accumulated ID mappings from previous chunks
-        normalizer = Normalizer(chunk_database, args.schema, accumulated_id_mapping)
-        normalized_database = normalizer.normalize_database()
-
-        # Update accumulated ID mappings with new mappings from this chunk
-        accumulated_id_mapping.update(normalizer.id_mapping)
-
-        # Save first chunk with overwrite mode, subsequent chunks with append mode
-        save_mode = "overwrite" if first_chunk else "append"
-        save_database(
-            normalized_database,
-            args.output_directory / args.state,
-            format=args.output_format,
-            mode=save_mode,
-        )
-
-        # Save updated ID mappings after each chunk
+    with staged_directory(state_output_directory) as staging:
+        id_mapping_file = staging / ID_MAPPING_NAME
+        # keep the loaded mapping even if there is nothing to normalize
         save_id_mapping(accumulated_id_mapping, id_mapping_file)
+        first_chunk = True
+        for chunk_database in tqdm(database_chunks, desc="Processing chunks"):
+            # Create normalizer with accumulated ID mappings from previous chunks
+            normalizer = Normalizer(chunk_database, args.schema, accumulated_id_mapping)
+            normalized_database = normalizer.normalize_database()
 
-        first_chunk = False
+            # Update accumulated ID mappings with new mappings from this chunk
+            accumulated_id_mapping.update(normalizer.id_mapping)
+
+            # Save first chunk with overwrite mode, subsequent chunks with append
+            save_mode = "overwrite" if first_chunk else "append"
+            save_database(
+                normalized_database,
+                staging,
+                format=args.output_format,
+                mode=save_mode,
+            )
+
+            # Save updated ID mappings after each chunk
+            save_id_mapping(accumulated_id_mapping, id_mapping_file)
+
+            first_chunk = False
+        combine_duplicates_across_chunks(staging, args.output_format, args.schema)
     return 0
 
 
 def run_clean(args: argparse.Namespace) -> int:
-    """Command entry point for cleaning normalized data"""
+    """Command entry point for cleaning normalized data
+
+    Written to a staging folder like run_normalize, with duplicates that span
+    chunks removed at the end.
+    """
     database_chunks = load_database(
         args.input_directory / args.state,
         format=args.input_format,
         chunk_size=args.chunk_size,
     )
-    first_chunk = True
-    for chunk_database in tqdm(database_chunks, desc="Processing chunks"):
-        cleaned_database = clean_data(chunk_database, args.schema)
-        save_mode = "overwrite" if first_chunk else "append"
-        save_database(
-            cleaned_database,
-            args.output_directory / args.state,
-            format=args.output_format,
-            mode=save_mode,
-        )
-        first_chunk = False
+    with staged_directory(args.output_directory / args.state) as staging:
+        first_chunk = True
+        for chunk_database in tqdm(database_chunks, desc="Processing chunks"):
+            cleaned_database = clean_data(chunk_database, args.schema)
+            save_mode = "overwrite" if first_chunk else "append"
+            save_database(
+                cleaned_database,
+                staging,
+                format=args.output_format,
+                mode=save_mode,
+            )
+            first_chunk = False
+        combine_duplicates_across_chunks(staging, args.output_format, args.schema)
     return 0
 
 

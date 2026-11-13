@@ -15,6 +15,7 @@ from pathlib import Path
 import pandas as pd
 
 from utils.constants import DEFAULT_SCHEMA_PATH
+from utils.io import replace_file_atomically
 from utils.schema import DataSchema, TableSchema
 
 # Matches any RFC 4122 uuid. Values that don't match are treated as raw ids.
@@ -54,6 +55,10 @@ def normalize_id_to_string(value: int | float | str | None) -> str:
     return str(value)
 
 
+# "222.0" or "-5.00", but not "0042" or "1.5"; group 1 is the whole number
+_WHOLE_NUMBER_WITH_ZERO_DECIMALS = re.compile(r"^(-?[1-9]\d*|0)\.0+$")
+
+
 def _id_part(value: object) -> str | None:
     """Write one value the same way however it was read
 
@@ -62,12 +67,14 @@ def _id_part(value: object) -> str | None:
 
     Returns:
         None for a missing value. Otherwise the value as text, with whole
-        numbers written without a decimal point, so 222, 222.0 and "222" all
-        give "222".
+        numbers written without a decimal point, so 222, 222.0, "222" and
+        "222.0" all give "222". Text like "222.0" comes from a number written
+        to CSV and read back as text. Leading zeros are kept ("0042").
     """
     if value is None or (not isinstance(value, str) and pd.isna(value)):
         return None
-    return normalize_id_to_string(value)
+    text = normalize_id_to_string(value)
+    return _WHOLE_NUMBER_WITH_ZERO_DECIMALS.sub(r"\1", text)
 
 
 def deterministic_uuid(parts: Iterable[object]) -> str:
@@ -132,8 +139,10 @@ def _column_id_parts(column: pd.Series) -> list[str | None]:
     if pd.api.types.is_string_dtype(column.dtype) and not pd.api.types.is_object_dtype(
         column.dtype
     ):
-        # every value is already text or missing, so _id_part would keep it
-        return column.astype(object).where(column.notna(), None).tolist()
+        # every value is already text or missing; the only change _id_part
+        # would make is to whole numbers written with zero decimals ("222.0")
+        text = column.str.replace(_WHOLE_NUMBER_WITH_ZERO_DECIMALS, r"\1", regex=True)
+        return text.astype(object).where(text.notna(), None).tolist()
     return [_id_part(value) for value in column]
 
 
@@ -394,7 +403,11 @@ def save_id_mapping(id_mapping: UUIDMapping, file_path: Path) -> None:
     # file reads back as it was saved even when some rows have no year
     id_mapping_df["year"] = id_mapping_df["year"].astype("Int64")
     file_path.parent.mkdir(parents=True, exist_ok=True)
-    id_mapping_df.to_csv(file_path, sep="\t", index=False)
+    # written to a temporary file and renamed, so a crash never leaves a
+    # half-written mapping
+    replace_file_atomically(
+        file_path, lambda path: id_mapping_df.to_csv(path, sep="\t", index=False)
+    )
 
 
 def load_id_mapping(file_path: Path) -> UUIDMapping:

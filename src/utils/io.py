@@ -1,6 +1,8 @@
 """Database I/O utilities for CSV and Parquet formats."""
 
-from collections.abc import Generator
+import shutil
+from collections.abc import Callable, Generator, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Literal
 
@@ -10,6 +12,73 @@ import pyarrow.parquet as pq
 from utils.constants import ID_SUFFIX, SPLIT
 
 FileFormat = Literal["csv", "parquet"]
+
+# CSV tables are read as text, so values like zip "01234" and id "0042" keep
+# their leading zeros and don't change type with the rows around them. Only
+# empty fields are missing; text such as "NA" or "null" is kept as written.
+_CSV_TEXT_READ_PARAMS = {"dtype": str, "keep_default_na": False, "na_values": [""]}
+
+
+@contextmanager
+def staged_directory(final_directory: Path) -> Iterator[Path]:
+    """Write a step's output to a staging folder and swap it in on success
+
+    The staging folder is a hidden sibling of final_directory. If the block
+    finishes, final_directory is replaced by the staging folder, so files from
+    an earlier run that this run didn't write are gone. If the block raises,
+    the staging folder is deleted and final_directory is left as it was.
+
+    Args:
+        final_directory: Folder the output should end up in, such as
+            <data>/normalized/<state>.
+
+    Yields:
+        The staging folder to write to.
+    """
+    final_directory = Path(final_directory)
+    staging = final_directory.parent / f".{final_directory.name}.staging"
+    previous = final_directory.parent / f".{final_directory.name}.previous"
+    # a run that died between the two renames below left the last good output
+    # as .previous and no final folder; put it back before anything is removed
+    if previous.exists() and not final_directory.exists():
+        previous.rename(final_directory)
+    for leftover in (staging, previous):
+        if leftover.exists():
+            shutil.rmtree(leftover)
+    staging.mkdir(parents=True)
+    try:
+        yield staging
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    if final_directory.exists():
+        final_directory.rename(previous)
+    try:
+        staging.rename(final_directory)
+    except BaseException:
+        # keep the last good output if the swap itself fails
+        if previous.exists() and not final_directory.exists():
+            previous.rename(final_directory)
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    if previous.exists():
+        shutil.rmtree(previous)
+
+
+def replace_file_atomically(file_path: Path, write: Callable[[Path], None]) -> None:
+    """Write a file through a temporary file, so a crash never leaves it cut short
+
+    Args:
+        file_path: File to write.
+        write: Function that writes the content to the path it is given.
+    """
+    file_path = Path(file_path)
+    temporary_path = file_path.with_name(f".{file_path.name}.tmp")
+    try:
+        write(temporary_path)
+        temporary_path.replace(file_path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
 
 
 def load_database(
@@ -73,7 +142,7 @@ def load_table_chunked(
         DataFrame chunks
     """
     if format == "csv":
-        yield from pd.read_csv(file_path, chunksize=chunk_size)
+        yield from pd.read_csv(file_path, chunksize=chunk_size, **_CSV_TEXT_READ_PARAMS)
     elif format == "parquet":
         total_rows = _count_rows(file_path)
         for start in range(0, total_rows, chunk_size):
@@ -128,11 +197,48 @@ def _get_data_files(path: Path, format: FileFormat) -> list[Path]:
     return [f for f in path.iterdir() if f.suffix == f".{format}"]
 
 
+def load_table(file_path: Path, format: FileFormat) -> pd.DataFrame:
+    """Load a whole table file
+
+    Args:
+        file_path: The table's file.
+        format: "csv" or "parquet". CSV columns are read as text.
+
+    Returns:
+        The table, or an empty DataFrame for an empty CSV file.
+    """
+    return _load_table(file_path, format)
+
+
+def table_column(file_path: Path, format: FileFormat, column: str) -> pd.Series | None:
+    """Read one column of a table file without loading the rest
+
+    Args:
+        file_path: The table's file.
+        format: "csv" or "parquet".
+        column: Column to read.
+
+    Returns:
+        The column, or None if the file has no such column.
+    """
+    if format == "csv":
+        try:
+            header = pd.read_csv(file_path, nrows=0).columns
+        except pd.errors.EmptyDataError:
+            return None
+        if column not in header:
+            return None
+        return pd.read_csv(file_path, usecols=[column], **_CSV_TEXT_READ_PARAMS)[column]
+    if column not in pq.read_schema(file_path).names:
+        return None
+    return pd.read_parquet(file_path, columns=[column])[column]
+
+
 def _load_table(file_path: Path, format: FileFormat) -> pd.DataFrame:
     """Load a single table file."""
     if format == "csv":
         try:
-            return pd.read_csv(file_path)
+            return pd.read_csv(file_path, **_CSV_TEXT_READ_PARAMS)
         except pd.errors.EmptyDataError:
             return pd.DataFrame()
     elif format == "parquet":
@@ -179,9 +285,14 @@ def _save_table(
     save_index = bool(df.index.name)
 
     if format == "csv":
-        write_header = mode == "overwrite" or not file_path.exists()
-        write_mode = "w" if mode == "overwrite" else "a"
-        df.to_csv(file_path, index=save_index, header=write_header, mode=write_mode)
+        appending = mode == "append" and file_path.exists()
+        rows = _align_to_csv_header(df, file_path, save_index) if appending else df
+        rows.to_csv(
+            file_path,
+            index=save_index,
+            header=not appending,
+            mode="a" if appending else "w",
+        )
 
     elif format == "parquet":
         if mode == "append" and file_path.exists():
@@ -194,10 +305,44 @@ def _save_table(
             proper_type_df.to_parquet(file_path, index=save_index)
 
 
+def _align_to_csv_header(
+    chunk: pd.DataFrame, file_path: Path, save_index: bool
+) -> pd.DataFrame:
+    """Put a chunk's columns in the order of an existing CSV file's header
+
+    Appended rows are written without a header, so each value lands under the
+    header in the same position. Columns the file has and the chunk doesn't
+    are left empty.
+
+    Args:
+        chunk: Chunk to append.
+        file_path: Existing CSV file.
+        save_index: Whether the chunk's index is written as the first column.
+
+    Returns:
+        The chunk with the file's columns, in the file's order.
+
+    Raises:
+        ValueError: if the chunk has columns the file's header doesn't, since
+            they can't be appended without rewriting the file.
+    """
+    header = list(pd.read_csv(file_path, nrows=0).columns)
+    if save_index:
+        header = header[1:]
+    extra_columns = [column for column in chunk.columns if column not in header]
+    if extra_columns:
+        raise ValueError(
+            f"Can't append to {file_path}: the chunk has columns its header"
+            f" doesn't: {extra_columns}"
+        )
+    return chunk.reindex(columns=header)
+
+
 def _count_rows(file_path: Path) -> int:
     """Count rows in a data file."""
     if file_path.suffix == ".csv":
-        return sum(1 for _ in file_path.open()) - 1  # Exclude header
+        with file_path.open() as file:
+            return sum(1 for _ in file) - 1  # Exclude header
     elif file_path.suffix == ".parquet":
         return pq.read_metadata(file_path).num_rows
 
@@ -208,7 +353,10 @@ def _read_chunk(
     """Read a specific chunk from a file."""
     if format == "csv":
         return pd.read_csv(
-            file_path, skiprows=range(1, start_row + 1), nrows=end_row - start_row
+            file_path,
+            skiprows=range(1, start_row + 1),
+            nrows=end_row - start_row,
+            **_CSV_TEXT_READ_PARAMS,
         )
     elif format == "parquet":
         return _read_parquet_chunk(file_path, start_row, end_row)
