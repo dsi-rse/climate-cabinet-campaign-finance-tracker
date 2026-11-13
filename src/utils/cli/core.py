@@ -28,6 +28,8 @@ from utils.standardize import standardize_state
 
 COERCED_VALUES_REPORT_NAME = "coerced_values.csv"
 ID_MAPPING_NAME = "id_mapping.tsv"
+# Database link builds when --database-path isn't given, in --output-directory
+DEFAULT_DATABASE_NAME = "campaign_finance.duckdb"
 
 
 def run_scrape(args: argparse.Namespace) -> int:
@@ -145,44 +147,61 @@ def run_clean(args: argparse.Namespace) -> int:
 
 
 def run_link(args: argparse.Namespace) -> int:
-    """Command entry point for performing record linkage on cleaned data"""
+    """Command entry point for performing record linkage on cleaned data
+
+    The source tables in the database are reloaded from the cleaned data on
+    every run (for the states in --states), so linkage always uses the
+    latest data. The database defaults to <output-directory>/
+    DEFAULT_DATABASE_NAME. Linkage results are added to the database's
+    linkage tables (see utils.link.predict); the source tables are never
+    changed.
+    """
     if args.model_path is None:
         raise ValueError(
             "--model-path is required for link: it is where a trained model is "
             "saved (with --train) and loaded from for inference."
         )
-    # check if the database exists and is not empty
-    database_exists = args.database_path.exists()
-    if database_exists:
-        con = connect_duckdb(args.database_path)
-        database_empty = (
-            con.execute("SELECT COUNT(*) FROM information_schema.tables")
-            .fetch_df()
-            .iloc[0, 0]
-            == 0
+    if args.database_path is None:
+        args.database_path = Path(args.output_directory) / DEFAULT_DATABASE_NAME
+    args.database_path.parent.mkdir(parents=True, exist_ok=True)
+    input_directory = args.input_directory
+    if input_directory is not None and Path(input_directory).is_dir():
+        con = create_database_from_nested_parquet_directories(
+            args.database_path,
+            Path(input_directory),
+            overwrite=args.overwrite,
+            states=args.states,
         )
     else:
-        database_empty = True
-    if database_exists and database_empty and args.input_directory is None:
-        raise ValueError("Database is empty. Please provide an input directory.")
-    if args.input_directory is not None and (args.overwrite or database_empty):
-        con = create_database_from_nested_parquet_directories(
-            args.database_path, args.input_directory, overwrite=args.overwrite
-        )
-    if not table_exists(con, args.table_name):
+        if not args.database_path.exists():
+            raise ValueError(
+                f"No cleaned data in {input_directory} and no database at "
+                f"{args.database_path}. Run clean first or give --input-directory."
+            )
+        con = connect_duckdb(args.database_path)
+        if not table_exists(con, "Transactor"):
+            con.close()
+            raise ValueError(
+                f"{args.database_path} has no Transactor table and there is no "
+                f"cleaned data in {input_directory} to load."
+            )
+    try:
+        # rebuilt every run, since the source tables may have changed
         create_transactor_detailed_view(con)
-    if args.train:
-        model_path = Path(args.model_path)
-        checkpoint_path = model_path.with_name(
-            f"{model_path.stem}_checkpoint{model_path.suffix or '.json'}"
-        )
-        train_splink(
-            con,
-            args.table_name,
-            args.model_path,
-            checkpoint_path=checkpoint_path,
-            resume_from_checkpoint=args.resume_from_checkpoint,
-        )
+        if args.train:
+            model_path = Path(args.model_path)
+            checkpoint_path = model_path.with_name(
+                f"{model_path.stem}_checkpoint{model_path.suffix or '.json'}"
+            )
+            train_splink(
+                con,
+                args.table_name,
+                args.model_path,
+                checkpoint_path=checkpoint_path,
+                resume_from_checkpoint=args.resume_from_checkpoint,
+            )
+    finally:
+        con.close()
     run_linkage_pipeline(
         duckdb_path=args.database_path,
         model_path=args.model_path,

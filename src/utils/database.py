@@ -5,7 +5,7 @@ from pathlib import Path
 import duckdb
 
 from utils.constants import DEFAULT_SCHEMA_PATH
-from utils.schema import DataSchema, parse_decimal_type
+from utils.schema import DataSchema, TableSchema, parse_decimal_type
 
 
 def _get_data_schema() -> DataSchema:
@@ -124,21 +124,7 @@ def create_or_append_parquet_to_db(
         # Create the table explicitly using the YAML schema definitions so column
         # types are consistent regardless of the first Parquet file encountered.
 
-        data_schema = _get_data_schema()
-        try:
-            table_schema = data_schema.schema[table_path.stem]
-        except KeyError as exc:
-            raise KeyError(
-                f"Table '{table_path.stem}' not found in YAML schema located at {DEFAULT_SCHEMA_PATH}."
-            ) from exc
-
-        # Build column definitions "name TYPE"
-        column_defs = ", ".join(
-            f"{col} {_duckdb_type(dtype)}" for col, dtype in table_schema.types.items()
-        )
-
-        # Create the empty table with explicit schema
-        con.execute(f"CREATE TABLE {table_path.stem} ({column_defs})")
+        table_schema = create_schema_table(con, table_path.stem)
 
         # Insert data from the Parquet file into the table, aligning by column
         # names present in the YAML schema.
@@ -150,6 +136,32 @@ def create_or_append_parquet_to_db(
             f"INSERT INTO {table_path.stem} ({column_list}) "
             f"SELECT {select_list} FROM read_parquet('{str(table_path.resolve())}')"
         )
+
+
+def create_schema_table(con: duckdb.DuckDBPyConnection, table_name: str) -> TableSchema:
+    """Create an empty table with the columns and types the schema gives it
+
+    Args:
+        con: DuckDB connection.
+        table_name: A table in the YAML schema.
+
+    Returns:
+        The table's schema.
+
+    Raises:
+        KeyError: if the schema has no such table.
+    """
+    try:
+        table_schema = _get_data_schema().schema[table_name]
+    except KeyError as exc:
+        raise KeyError(
+            f"Table '{table_name}' not found in YAML schema located at {DEFAULT_SCHEMA_PATH}."
+        ) from exc
+    column_defs = ", ".join(
+        f"{col} {_duckdb_type(dtype)}" for col, dtype in table_schema.types.items()
+    )
+    con.execute(f"CREATE TABLE {table_name} ({column_defs})")
+    return table_schema
 
 
 def _parquet_select_list(
@@ -187,14 +199,45 @@ def _parquet_select_list(
     )
 
 
-def create_database_from_nested_parquet_directories(
-    database_path: Path, database_dir: Path, overwrite: bool = False
-) -> duckdb.DuckDBPyConnection:
-    """Create a DuckDB database from a nested directory of parquet files.
+DETAILED_VIEW_TABLE = "transactor_detailed_view"
+# Tables the detailed view is built from. A state without one (TX has no
+# Membership rows) still gets an empty table, so the view can be built.
+DETAILED_VIEW_SOURCE_TABLES = ("Transactor", "Membership", "Address")
 
-    The database_path should be a path to a directory containing only
-    more directories, each containing parquet files whose names
-    are the tables to which they should be added. Example:
+
+def _drop_relations(con: duckdb.DuckDBPyConnection, names: set[str] | None) -> None:
+    """Drop tables and views by name
+
+    Args:
+        con: DuckDB connection.
+        names: Names to drop, or None to drop every table and view.
+    """
+    relations = con.execute(
+        "SELECT table_name, table_type FROM information_schema.tables"
+    ).fetchall()
+    # views first, since they can depend on tables
+    for name, table_type in sorted(relations, key=lambda row: row[1] != "VIEW"):
+        if names is not None and name not in names:
+            continue
+        kind = "VIEW" if table_type == "VIEW" else "TABLE"
+        con.execute(f'DROP {kind} IF EXISTS "{name}"')
+
+
+def create_database_from_nested_parquet_directories(
+    database_path: Path,
+    database_dir: Path,
+    overwrite: bool = False,
+    states: list[str] | None = None,
+) -> duckdb.DuckDBPyConnection:
+    """Load the cleaned tables of each state into a DuckDB database
+
+    The source tables (every table in the schema, and the detailed view
+    table built from them) are dropped and reloaded, so the database always
+    matches the cleaned data. Other tables, such as the linkage run history,
+    are kept unless overwrite is True.
+
+    database_dir holds one folder per state, each with one parquet file per
+    table. Example:
     database_dir/
     ├── state1/
     │   ├── table1.parquet
@@ -206,28 +249,44 @@ def create_database_from_nested_parquet_directories(
     Args:
         database_path: Path to the DuckDB database
         database_dir: Path to the directory containing the parquet files
-        overwrite: Whether to overwrite existing tables
+        overwrite: If True, drop every table and view first, including the
+            linkage history
+        states: State folders to load (compared ignoring case). None loads
+            every state folder.
 
     Returns:
         DuckDB connection
+
+    Raises:
+        RuntimeError: if any table file fails to load. Every failure is
+            listed, after all the other files have been tried.
     """
     con = duckdb.connect(str(database_path))
-    if overwrite:
-        # drop all data from tables
-        for table in con.execute(
-            "SELECT table_name FROM information_schema.tables"
-        ).fetchall():
-            con.execute(f"DROP TABLE IF EXISTS {table[0]}")
-    for state_dir in database_dir.iterdir():
+    source_tables = set(_get_data_schema().schema) | {DETAILED_VIEW_TABLE}
+    _drop_relations(con, None if overwrite else source_tables)
+    wanted_states = {state.lower() for state in states} if states else None
+    failures = []
+    for state_dir in sorted(database_dir.iterdir()):
         # skip files and hidden folders, such as a staging folder left by a
         # step that was killed (see utils.io.staged_directory)
         if not state_dir.is_dir() or state_dir.name.startswith("."):
             continue
-        for file in state_dir.glob("*.parquet"):
+        if wanted_states is not None and state_dir.name.lower() not in wanted_states:
+            continue
+        for file in sorted(state_dir.glob("*.parquet")):
             try:
                 create_or_append_parquet_to_db(con, file)
-            except Exception as e:
-                print(f"Error creating table {state_dir.name} {file.stem}:\n {e}")
+            except Exception as error:  # noqa: BLE001 (all reported below)
+                failures.append(f"{state_dir.name}/{file.name}: {error}")
+    for table_name in DETAILED_VIEW_SOURCE_TABLES:
+        if not table_exists(con, table_name):
+            create_schema_table(con, table_name)
+    if failures:
+        con.close()
+        raise RuntimeError(
+            f"{len(failures)} table file(s) failed to load into {database_path}:\n"
+            + "\n".join(failures)
+        )
     return con
 
 
@@ -358,7 +417,7 @@ def create_transactor_detailed_view(con: duckdb.DuckDBPyConnection) -> None:
         WHERE cnt = max_cnt
         GROUP BY transactor_id
     """).strip()
-    table_name = "transactor_detailed_view"
+    table_name = DETAILED_VIEW_TABLE
     con.execute(f"DROP TABLE IF EXISTS {table_name}")
     select_list = ",\n            ".join(select_parts)
     sql_select = dedent(f"""
