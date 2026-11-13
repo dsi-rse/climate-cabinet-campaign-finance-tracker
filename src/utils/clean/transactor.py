@@ -5,19 +5,30 @@ import re
 import nameparser
 import pandas as pd
 
+# Words that mark a name as an organization's. Each is matched as a whole
+# word, ignoring case, so "inc" matches "Acme Inc" but not "Vincent", and
+# "pac" matches "Friends of Bob PAC" but not "Spacek".
 company_name_patterns = [
     r"inc",
+    r"incorporated",
     r"llc",
+    r"llp",
     r"ltd",
     r"corp",
+    r"corporation",
+    r"company",
     r"committee",
     r"party",
+    r"caucus",
     r"foundation",
     r"union",
-    r"associat",
-    r"[0-9]",
-    r"\wPAC\w",
+    r"associat\w*",
+    r"pac",
+    r"fund",
+    r"friends of",
+    r"citizens for",
 ]
+_ORGANIZATION_NAME_REGEX = rf"\b(?:{'|'.join(company_name_patterns)})\b"
 
 
 def _clean_name_components(
@@ -125,22 +136,34 @@ def clean_individuals_names(names: pd.DataFrame) -> pd.DataFrame:
 
 
 def fill_in_transactor_types(names: pd.DataFrame) -> pd.DataFrame:
-    """Fill in transactor types based on name components
+    """Fill in missing transactor types from the name
+
+    A type the state supplied is never changed. A missing type becomes
+    "Organization" when full_name or last_name contains a word from
+    company_name_patterns, and "Unknown" otherwise.
 
     Args:
-        names: A dataframe with columns:
-            full_name, first_name, middle_name, last_name, name_prefix,
-            name_suffix, name_preferred
+        names: A dataframe with columns full_name, last_name and
+            transactor_type.
+
+    Returns:
+        names with transactor_type filled in, and transactor_type_inferred
+        True where the type came from the name rather than the state.
     """
-    possible_org_names = names[["full_name", "last_name"]]
-    pattern = "|".join(company_name_patterns)
-    contains_any = possible_org_names.apply(
-        lambda col: col.astype("string").str.contains(pattern, case=False, na=False)
+    missing_type = names["transactor_type"].isna()
+    looks_like_organization = (
+        names[["full_name", "last_name"]]
+        .apply(
+            lambda col: col.astype("string").str.contains(
+                _ORGANIZATION_NAME_REGEX, case=False, na=False, regex=True
+            )
+        )
+        .any(axis=1)
     )
-    probable_organization_mask = contains_any.any(axis=1)
-    names.loc[probable_organization_mask, "transactor_type"] = "Organization"
+    inferred = missing_type & looks_like_organization
+    names.loc[inferred, "transactor_type"] = "Organization"
     names["transactor_type"] = names["transactor_type"].fillna("Unknown")
-    # TODO: improve transactor_type prediction
+    names["transactor_type_inferred"] = inferred.to_numpy()
     return names
 
 

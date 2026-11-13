@@ -14,6 +14,9 @@ Transactor:
     - full_name
     - transactor_type_specific
     - transactor_type # Indivudual or Organization
+    # True when clean filled in transactor_type from the name because the
+    # state didn't give one
+    - transactor_type_inferred
     - phone_number
     - email
     - party
@@ -45,7 +48,9 @@ Transactor:
       table: Address
       direction: reverse
       reverse_relation_name: transactor_id
-    
+  types:
+    transactor_type_inferred: bool
+
 
 Individual:
   parent_table: Transactor
