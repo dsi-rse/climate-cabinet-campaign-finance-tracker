@@ -55,8 +55,8 @@ def normalize_id_to_string(value: int | float | str | None) -> str:
     return str(value)
 
 
-# "222.0" or "-5.00", but not "0042" or "1.5"
-_WHOLE_NUMBER_WITH_ZERO_DECIMALS = re.compile(r"^-?[1-9]\d*\.0+$|^0\.0+$")
+# "222.0" or "-5.00", but not "0042" or "1.5"; group 1 is the whole number
+_WHOLE_NUMBER_WITH_ZERO_DECIMALS = re.compile(r"^(-?[1-9]\d*|0)\.0+$")
 
 
 def _id_part(value: object) -> str | None:
@@ -74,9 +74,7 @@ def _id_part(value: object) -> str | None:
     if value is None or (not isinstance(value, str) and pd.isna(value)):
         return None
     text = normalize_id_to_string(value)
-    if _WHOLE_NUMBER_WITH_ZERO_DECIMALS.match(text):
-        return text.split(".")[0]
-    return text
+    return _WHOLE_NUMBER_WITH_ZERO_DECIMALS.sub(r"\1", text)
 
 
 def deterministic_uuid(parts: Iterable[object]) -> str:
@@ -141,8 +139,10 @@ def _column_id_parts(column: pd.Series) -> list[str | None]:
     if pd.api.types.is_string_dtype(column.dtype) and not pd.api.types.is_object_dtype(
         column.dtype
     ):
-        # every value is already text or missing, so _id_part would keep it
-        return column.astype(object).where(column.notna(), None).tolist()
+        # every value is already text or missing; the only change _id_part
+        # would make is to whole numbers written with zero decimals ("222.0")
+        text = column.str.replace(_WHOLE_NUMBER_WITH_ZERO_DECIMALS, r"\1", regex=True)
+        return text.astype(object).where(text.notna(), None).tolist()
     return [_id_part(value) for value in column]
 
 

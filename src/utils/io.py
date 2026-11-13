@@ -38,6 +38,10 @@ def staged_directory(final_directory: Path) -> Iterator[Path]:
     final_directory = Path(final_directory)
     staging = final_directory.parent / f".{final_directory.name}.staging"
     previous = final_directory.parent / f".{final_directory.name}.previous"
+    # a run that died between the two renames below left the last good output
+    # as .previous and no final folder; put it back before anything is removed
+    if previous.exists() and not final_directory.exists():
+        previous.rename(final_directory)
     for leftover in (staging, previous):
         if leftover.exists():
             shutil.rmtree(leftover)
@@ -49,7 +53,14 @@ def staged_directory(final_directory: Path) -> Iterator[Path]:
         raise
     if final_directory.exists():
         final_directory.rename(previous)
-    staging.rename(final_directory)
+    try:
+        staging.rename(final_directory)
+    except BaseException:
+        # keep the last good output if the swap itself fails
+        if previous.exists() and not final_directory.exists():
+            previous.rename(final_directory)
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
     if previous.exists():
         shutil.rmtree(previous)
 

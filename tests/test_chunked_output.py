@@ -16,8 +16,15 @@ import pytest
 from utils.clean.columns import clean_table_columns
 from utils.cli.core import main
 from utils.constants import DEFAULT_SCHEMA_PATH
-from utils.ids import _id_part, load_id_mapping, save_id_mapping, source_id_uuid
+from utils.ids import (
+    _column_id_parts,
+    _id_part,
+    load_id_mapping,
+    save_id_mapping,
+    source_id_uuid,
+)
 from utils.io import load_database, save_database, staged_directory
+from utils.normalize import combine_duplicates_across_chunks
 from utils.schema import DataSchema
 
 RAW_FIXTURE_DIRECTORY = Path(__file__).parent / "data" / "standardize" / "raw"
@@ -136,7 +143,11 @@ def test_rerun_removes_tables_and_files_from_earlier_runs(data_directory):
     output = data_directory / "normalized" / "tx"
     stale = pd.DataFrame({"id": ["old"], "city": ["OLD RUN"]})
     stale.to_parquet(output / "Stale.parquet")
-    first_mapping = load_id_mapping(output / "id_mapping.tsv")
+    # an entry for an input that is gone can only survive if the re-run
+    # loads the previous mapping (every other uuid is remade from the rows)
+    carried = {("gone", None, "tx", "Transactor"): "carried-over-uuid"}
+    first_mapping = {**load_id_mapping(output / "id_mapping.tsv"), **carried}
+    save_id_mapping(first_mapping, output / "id_mapping.tsv")
 
     run("normalize", data_directory, "--chunk-size", "2")
 
@@ -238,8 +249,14 @@ def test_id_mapping_is_not_left_half_written(tmp_path):
     save_id_mapping({("1", None, "TX", "Transactor"): "u-1"}, path)
     before = path.read_bytes()
 
+    def write_part_then_fail(self: pd.DataFrame, path: Path, *args, **kwargs):
+        Path(path).write_text("partial")
+        raise OSError("disk full")
+
     with (
-        mock.patch.object(pd.DataFrame, "to_csv", side_effect=OSError("disk full")),
+        mock.patch.object(
+            pd.DataFrame, "to_csv", autospec=True, side_effect=write_part_then_fail
+        ),
         pytest.raises(OSError, match="disk full"),
     ):
         save_id_mapping({("2", None, "TX", "Transactor"): "u-2"}, path)
@@ -293,6 +310,90 @@ def test_ids_match_however_a_number_was_written():
     assert {_id_part(value) for value in (222, 222.0, "222", "222.0")} == {"222"}
     assert _id_part("0042") == "0042"
     assert _id_part("1.5") == "1.5"
+    # a column read from CSV as text takes the vectorised path
+    for dtype in (object, str, "string"):
+        column = pd.Series(["222.0", "0042", "1.5", None], dtype=dtype)
+        assert _column_id_parts(column) == ["222", "0042", "1.5", None], dtype
     assert source_id_uuid(("222.0", "2020.0", "TX", "T")) == source_id_uuid(
         (222, 2020, "TX", "T")
     )
+
+
+@pytest.mark.parametrize("format", ["parquet", "csv"])
+def test_combine_duplicates_across_chunks_by_table_type(tmp_path, format):
+    """Rows sharing an id are combined, split-off duplicates dropped, the rest kept
+
+    Two identical transactions are two payments, so Transaction is left alone,
+    and a table with nothing to combine is not rewritten.
+
+    Args:
+        tmp_path: Temporary directory for this test (pytest fixture).
+        format: "csv" or "parquet".
+    """
+    tables = {
+        "Transactor": pd.DataFrame(
+            {"id": ["a", "a", "b"], "full_name": ["Ann", None, "Bob"]}
+        ),
+        "Address": pd.DataFrame(
+            {"transactor_id": ["a", "a", "b"], "city": ["Austin", "Austin", "Waco"]}
+        ),
+        "Membership": pd.DataFrame(
+            {"member_id": ["a", "a"], "organization_id": ["b", "b"]}
+        ),
+        "Transaction": pd.DataFrame(
+            {"donor_id": ["a", "a"], "recipient_id": ["b", "b"], "amount": [5, 5]}
+        ),
+        "Election": pd.DataFrame({"id": ["e1", "e2"], "year": [2020, 2022]}),
+    }
+    save_database(tables, tmp_path, format=format)
+
+    with mock.patch(
+        "utils.normalize._core.save_database", wraps=save_database
+    ) as saved:
+        combine_duplicates_across_chunks(tmp_path, format, DEFAULT_SCHEMA_PATH)
+
+    rewritten = {name for call in saved.call_args_list for name in call.args[0]}
+    assert rewritten == {"Transactor", "Address", "Membership"}
+    result = read_tables(tmp_path, format)
+    assert sorted_rows(result["Transactor"]) == [("Ann", "a"), ("Bob", "b")]
+    assert len(result["Address"]) == 2
+    assert len(result["Membership"]) == 1
+    assert len(result["Transaction"]) == 2
+    assert len(result["Election"]) == 2
+
+
+def test_staged_directory_recovers_the_previous_output_after_a_crash(tmp_path):
+    """A death between the two renames leaves .previous, which the next run restores
+
+    Args:
+        tmp_path: Temporary directory for this test (pytest fixture).
+    """
+    final = tmp_path / "tx"
+    final.mkdir()
+    (final / "old.csv").write_text("old")
+    rename = Path.rename
+
+    def fail_second_rename(self: Path, target: Path):
+        if self.name == ".tx.staging":
+            raise PermissionError("swap failed")
+        return rename(self, target)
+
+    with (
+        mock.patch.object(
+            Path, "rename", autospec=True, side_effect=fail_second_rename
+        ),
+        pytest.raises(PermissionError),
+        staged_directory(final) as staging,
+    ):
+        (staging / "new.csv").write_text("new")
+    assert [path.name for path in final.iterdir()] == ["old.csv"]
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["tx"]
+
+    # as left by a process killed between the renames
+    final.rename(tmp_path / ".tx.previous")
+    (tmp_path / ".tx.staging").mkdir()
+    with staged_directory(final) as staging:
+        assert [path.name for path in final.iterdir()] == ["old.csv"]
+        (staging / "new.csv").write_text("new")
+    assert [path.name for path in final.iterdir()] == ["new.csv"]
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["tx"]
