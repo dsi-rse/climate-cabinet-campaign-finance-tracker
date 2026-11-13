@@ -1,11 +1,12 @@
 """Database utilities."""
 
 from pathlib import Path
+from textwrap import dedent
 
 import duckdb
 
 from utils.constants import DEFAULT_SCHEMA_PATH
-from utils.schema import DataSchema, parse_decimal_type
+from utils.schema import DataSchema, TableSchema, parse_decimal_type
 
 
 def _get_data_schema() -> DataSchema:
@@ -124,21 +125,7 @@ def create_or_append_parquet_to_db(
         # Create the table explicitly using the YAML schema definitions so column
         # types are consistent regardless of the first Parquet file encountered.
 
-        data_schema = _get_data_schema()
-        try:
-            table_schema = data_schema.schema[table_path.stem]
-        except KeyError as exc:
-            raise KeyError(
-                f"Table '{table_path.stem}' not found in YAML schema located at {DEFAULT_SCHEMA_PATH}."
-            ) from exc
-
-        # Build column definitions "name TYPE"
-        column_defs = ", ".join(
-            f"{col} {_duckdb_type(dtype)}" for col, dtype in table_schema.types.items()
-        )
-
-        # Create the empty table with explicit schema
-        con.execute(f"CREATE TABLE {table_path.stem} ({column_defs})")
+        table_schema = create_schema_table(con, table_path.stem)
 
         # Insert data from the Parquet file into the table, aligning by column
         # names present in the YAML schema.
@@ -150,6 +137,32 @@ def create_or_append_parquet_to_db(
             f"INSERT INTO {table_path.stem} ({column_list}) "
             f"SELECT {select_list} FROM read_parquet('{str(table_path.resolve())}')"
         )
+
+
+def create_schema_table(con: duckdb.DuckDBPyConnection, table_name: str) -> TableSchema:
+    """Create an empty table with the columns and types the schema gives it
+
+    Args:
+        con: DuckDB connection.
+        table_name: A table in the YAML schema.
+
+    Returns:
+        The table's schema.
+
+    Raises:
+        KeyError: if the schema has no such table.
+    """
+    try:
+        table_schema = _get_data_schema().schema[table_name]
+    except KeyError as exc:
+        raise KeyError(
+            f"Table '{table_name}' not found in YAML schema located at {DEFAULT_SCHEMA_PATH}."
+        ) from exc
+    column_defs = ", ".join(
+        f"{col} {_duckdb_type(dtype)}" for col, dtype in table_schema.types.items()
+    )
+    con.execute(f"CREATE TABLE {table_name} ({column_defs})")
+    return table_schema
 
 
 def _parquet_select_list(
@@ -187,14 +200,45 @@ def _parquet_select_list(
     )
 
 
-def create_database_from_nested_parquet_directories(
-    database_path: Path, database_dir: Path, overwrite: bool = False
-) -> duckdb.DuckDBPyConnection:
-    """Create a DuckDB database from a nested directory of parquet files.
+DETAILED_VIEW_TABLE = "transactor_detailed_view"
+# Tables the detailed view is built from. A state without one (TX has no
+# Membership rows) still gets an empty table, so the view can be built.
+DETAILED_VIEW_SOURCE_TABLES = ("Transactor", "Membership", "Address")
 
-    The database_path should be a path to a directory containing only
-    more directories, each containing parquet files whose names
-    are the tables to which they should be added. Example:
+
+def _drop_relations(con: duckdb.DuckDBPyConnection, names: set[str] | None) -> None:
+    """Drop tables and views by name
+
+    Args:
+        con: DuckDB connection.
+        names: Names to drop, or None to drop every table and view.
+    """
+    relations = con.execute(
+        "SELECT table_name, table_type FROM information_schema.tables"
+    ).fetchall()
+    # views first, since they can depend on tables
+    for name, table_type in sorted(relations, key=lambda row: row[1] != "VIEW"):
+        if names is not None and name not in names:
+            continue
+        kind = "VIEW" if table_type == "VIEW" else "TABLE"
+        con.execute(f'DROP {kind} IF EXISTS "{name}"')
+
+
+def create_database_from_nested_parquet_directories(
+    database_path: Path,
+    database_dir: Path,
+    overwrite: bool = False,
+    states: list[str] | None = None,
+) -> duckdb.DuckDBPyConnection:
+    """Load the cleaned tables of each state into a DuckDB database
+
+    The source tables (every table in the schema, and the detailed view
+    table built from them) are dropped and reloaded, so the database always
+    matches the cleaned data. Other tables, such as the linkage run history,
+    are kept unless overwrite is True.
+
+    database_dir holds one folder per state, each with one parquet file per
+    table. Example:
     database_dir/
     ├── state1/
     │   ├── table1.parquet
@@ -206,34 +250,114 @@ def create_database_from_nested_parquet_directories(
     Args:
         database_path: Path to the DuckDB database
         database_dir: Path to the directory containing the parquet files
-        overwrite: Whether to overwrite existing tables
+        overwrite: If True, drop every table and view first, including the
+            linkage history
+        states: State folders to load (compared ignoring case). None loads
+            every state folder.
 
     Returns:
         DuckDB connection
+
+    Raises:
+        RuntimeError: if any table file fails to load. Every failure is
+            listed, after all the other files have been tried.
     """
     con = duckdb.connect(str(database_path))
-    if overwrite:
-        # drop all data from tables
-        for table in con.execute(
-            "SELECT table_name FROM information_schema.tables"
-        ).fetchall():
-            con.execute(f"DROP TABLE IF EXISTS {table[0]}")
-    for state_dir in database_dir.iterdir():
+    source_tables = set(_get_data_schema().schema) | {DETAILED_VIEW_TABLE}
+    _drop_relations(con, None if overwrite else source_tables)
+    wanted_states = {state.lower() for state in states} if states else None
+    failures = []
+    for state_dir in sorted(database_dir.iterdir()):
         # skip files and hidden folders, such as a staging folder left by a
         # step that was killed (see utils.io.staged_directory)
         if not state_dir.is_dir() or state_dir.name.startswith("."):
             continue
-        for file in state_dir.glob("*.parquet"):
+        if wanted_states is not None and state_dir.name.lower() not in wanted_states:
+            continue
+        for file in sorted(state_dir.glob("*.parquet")):
             try:
                 create_or_append_parquet_to_db(con, file)
-            except Exception as e:
-                print(f"Error creating table {state_dir.name} {file.stem}:\n {e}")
+            except Exception as error:  # noqa: BLE001 (all reported below)
+                failures.append(f"{state_dir.name}/{file.name}: {error}")
+    for table_name in DETAILED_VIEW_SOURCE_TABLES:
+        if not table_exists(con, table_name):
+            create_schema_table(con, table_name)
+    if failures:
+        con.close()
+        raise RuntimeError(
+            f"{len(failures)} table file(s) failed to load into {database_path}:\n"
+            + "\n".join(failures)
+        )
     return con
 
 
+# Text columns of the detailed view that linkage compares. They are
+# lowercased and trimmed, so "SMITH" and "Smith " compare as equal.
+LINKAGE_TEXT_COLUMNS = (
+    "full_name",
+    "first_name",
+    "middle_name",
+    "last_name",
+    "name_prefix",
+    "name_suffix",
+    "address_city",
+    "address_street_name",
+    "employer_full_name",
+    "employer_role",
+)
+
+
+def _most_common_row(key: str, source_sql: str, columns: list[str]) -> str:
+    """Build SQL that picks each key's most common row, the same way every time
+
+    Rows are counted per key and combination of columns. The most common
+    combination wins; ties go to the latest latest_known_date (if it is one
+    of the columns), then to the values in alphabetical order. The whole row
+    comes from one combination, so a city and street are never mixed from
+    two addresses.
+
+    Args:
+        key: Column to pick one row for each value of, such as transactor_id.
+        source_sql: Query giving key and columns.
+        columns: Columns to pick.
+
+    Returns:
+        A query with one row per key: key and columns.
+    """
+    if not columns:
+        return f"SELECT DISTINCT {key} FROM ({source_sql}) source"
+    column_list = ", ".join(columns)
+    tie_breakers = ["COUNT(*) DESC"]
+    if "latest_known_date" in columns:
+        tie_breakers.append("latest_known_date DESC NULLS LAST")
+    tie_breakers += [f"{column} ASC NULLS LAST" for column in columns]
+    return dedent(f"""
+        SELECT {key}, {column_list}
+        FROM (
+            SELECT
+                {key}, {column_list},
+                ROW_NUMBER() OVER (
+                    PARTITION BY {key} ORDER BY {", ".join(tie_breakers)}
+                ) AS row_rank
+            FROM ({source_sql}) source
+            GROUP BY {key}, {column_list}
+        ) ranked
+        WHERE row_rank = 1
+    """).strip()
+
+
 def create_transactor_detailed_view(con: duckdb.DuckDBPyConnection) -> None:
-    """Create or replace a persistent table of transactor data with employment and address details."""
-    from textwrap import dedent
+    """Create or replace a table of transactors with their employer and address
+
+    Each transactor gets its most common employer (from Employee memberships)
+    and its most common address, picked as in _most_common_row, with the
+    employer's columns prefixed employer_ and the address's address_. The
+    text columns linkage compares (LINKAGE_TEXT_COLUMNS) are lowercased and
+    trimmed.
+
+    Args:
+        con: DuckDB connection with Transactor, Membership and Address tables.
+    """
 
     def _cols(table: str, exclude: set[str]) -> list[str]:
         """Return column names for a DuckDB `table` excluding `exclude`."""
@@ -243,125 +367,49 @@ def create_transactor_detailed_view(con: duckdb.DuckDBPyConnection) -> None:
             if col[1] not in exclude
         ]
 
-    def _csv(cols: list[str]) -> str:
-        """Return columns joined by ', '."""
-        return ", ".join(cols)
-
-    def _csv_prefixed(prefix: str, cols: list[str]) -> str:
-        """Return columns as 'prefix.col' joined by ', '."""
-        return ", ".join(f"{prefix}.{c}" for c in cols)
-
-    def _select_with_alias(alias: str, cols: list[str], out_prefix: str) -> str:
-        """Return a multiline SELECT fragment 'alias.col AS out_prefix_col' joined by commas."""
-        return ",\n            ".join(f"{alias}.{c} AS {out_prefix}_{c}" for c in cols)
-
-    def _any_value_on_max(cols: list[str]) -> str:
-        """Return aggregations 'any_value(col) FILTER (WHERE cnt = max_cnt) AS col' joined by commas."""
-        return ", ".join(
-            f"any_value({c}) FILTER (WHERE cnt = max_cnt) AS {c}" for c in cols
-        )
-
-    membership_columns = _cols("Membership", {"member_id", "organization_id"})
     transactor_columns = _cols("Transactor", {"id"})
+    # a column in both (reported_state) is taken from the employer itself
+    membership_columns = _cols(
+        "Membership", {"member_id", "organization_id", *transactor_columns}
+    )
     address_columns = _cols("Address", {"transactor_id"})
+    employer_columns = membership_columns + transactor_columns
 
-    membership_select_clause = (
-        _select_with_alias("employer_data", membership_columns, "employer")
-        if membership_columns
-        else ""
+    employer_source = (
+        "SELECT Membership.member_id"
+        + "".join(
+            [f", Membership.{column}" for column in membership_columns]
+            + [f", Transactor.{column}" for column in transactor_columns]
+        )
+        + dedent("""
+        FROM Membership
+        JOIN Transactor ON Membership.organization_id = Transactor.id
+        WHERE Membership.membership_type = 'Employee'
+    """)
     )
-    employer_select_clause = (
-        _select_with_alias("employer_data", transactor_columns, "employer")
-        if transactor_columns
-        else ""
+    employer_subquery = _most_common_row("member_id", employer_source, employer_columns)
+    address_source = (
+        "SELECT transactor_id"
+        + "".join(f", {column}" for column in address_columns)
+        + " FROM Address"
     )
-    address_select_clause = (
-        _select_with_alias("address_data", address_columns, "address")
-        if address_columns
-        else ""
+    address_subquery = _most_common_row(
+        "transactor_id", address_source, address_columns
     )
 
     select_parts = ["t.*"]
-    if membership_select_clause:
-        select_parts.append(membership_select_clause)
-    if employer_select_clause:
-        select_parts.append(employer_select_clause)
-    if address_select_clause:
-        select_parts.append(address_select_clause)
-
-    # Employer subquery components (built safely to avoid stray commas when lists are empty)
-    employer_outer_cols = ["member_id"]
-    if membership_columns:
-        employer_outer_cols.append(_any_value_on_max(membership_columns))
-    if transactor_columns:
-        employer_outer_cols.append(_any_value_on_max(transactor_columns))
-
-    employer_inner_cols = ["member_id"]
-    if membership_columns:
-        employer_inner_cols.append(_csv(membership_columns))
-    if transactor_columns:
-        employer_inner_cols.append(_csv(transactor_columns))
-
-    employer_group_by_cols = ["member_id"]
-    if membership_columns:
-        employer_group_by_cols.append(_csv(membership_columns))
-    if transactor_columns:
-        employer_group_by_cols.append(_csv(transactor_columns))
-
-    employer_subquery = dedent(f"""
-        SELECT
-            {", ".join(employer_outer_cols)}
-        FROM (
-            SELECT
-                {", ".join(employer_inner_cols)},
-                COUNT(*) AS cnt,
-                MAX(COUNT(*)) OVER (PARTITION BY member_id) AS max_cnt
-            FROM (
-                SELECT
-                    Membership.member_id
-                    {(", " + _csv_prefixed("Membership", membership_columns)) if membership_columns else ""}
-                    {(", " + _csv_prefixed("Transactor", transactor_columns)) if transactor_columns else ""}
-                FROM Membership
-                JOIN Transactor ON Membership.organization_id = Transactor.id
-                WHERE Membership.membership_type = 'Employee'
-            ) joined_data
-            GROUP BY {", ".join(employer_group_by_cols)}
-        ) subq
-        WHERE cnt = max_cnt
-        GROUP BY member_id
-    """).strip()
-
-    # Address subquery
-    address_outer_cols = ["transactor_id"]
-    if address_columns:
-        address_outer_cols.append(_any_value_on_max(address_columns))
-
-    address_inner_cols = ["transactor_id"]
-    if address_columns:
-        address_inner_cols.append(_csv(address_columns))
-
-    address_group_by_cols = ["transactor_id"]
-    if address_columns:
-        address_group_by_cols.append(_csv(address_columns))
-
-    address_subquery = dedent(f"""
-        SELECT
-            {", ".join(address_outer_cols)}
-        FROM (
-            SELECT
-                {", ".join(address_inner_cols)},
-                COUNT(*) AS cnt,
-                MAX(COUNT(*)) OVER (PARTITION BY transactor_id) AS max_cnt
-            FROM Address
-            GROUP BY {", ".join(address_group_by_cols)}
-        ) subq
-        WHERE cnt = max_cnt
-        GROUP BY transactor_id
-    """).strip()
-    table_name = "transactor_detailed_view"
-    con.execute(f"DROP TABLE IF EXISTS {table_name}")
+    select_parts += [
+        f"employer_data.{column} AS employer_{column}" for column in employer_columns
+    ]
+    select_parts += [
+        f"address_data.{column} AS address_{column}" for column in address_columns
+    ]
     select_list = ",\n            ".join(select_parts)
-    sql_select = dedent(f"""
+    table_name = DETAILED_VIEW_TABLE
+    con.execute(f"DROP TABLE IF EXISTS {table_name}")
+    con.execute(
+        dedent(f"""
+        CREATE TABLE {table_name} AS
         SELECT
             {select_list}
         FROM Transactor t
@@ -370,7 +418,19 @@ def create_transactor_detailed_view(con: duckdb.DuckDBPyConnection) -> None:
         LEFT JOIN ({address_subquery}) address_data
             ON t.id = address_data.transactor_id
     """)
-    con.execute(f"CREATE TABLE {table_name} AS {sql_select}")
+    )
+    text_columns = [
+        name
+        for _, name, column_type, *_ in con.execute(
+            f"PRAGMA table_info('{table_name}')"
+        ).fetchall()
+        if name in LINKAGE_TEXT_COLUMNS and column_type == "VARCHAR"
+    ]
+    if text_columns:
+        assignments = ", ".join(
+            f"{column} = lower(trim({column}))" for column in text_columns
+        )
+        con.execute(f"UPDATE {table_name} SET {assignments}")
 
 
 def create_transactor_details_view_from_parquet(
