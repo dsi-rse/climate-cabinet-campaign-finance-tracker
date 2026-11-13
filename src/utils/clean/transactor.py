@@ -114,6 +114,8 @@ def clean_individuals_names(names: pd.DataFrame) -> pd.DataFrame:
     names.loc[likely_full_names, "full_name"] = names.loc[
         likely_full_names, "last_name"
     ]
+    # that last name was the whole name, so it is missing too and gets filled
+    names.loc[likely_full_names, "last_name"] = None
     first_missing = names["first_name"].isna().to_numpy()
     last_missing = names["last_name"].isna().to_numpy()
     to_parse = names["full_name"].notna().to_numpy() & (first_missing | last_missing)

@@ -240,6 +240,21 @@ def test_a_type_the_state_supplied_is_never_changed(supplied_type):
     assert not table["transactor_type_inferred"].any()
 
 
+def test_an_organization_word_in_the_last_name_alone_is_enough():
+    """A state that gives only last_name "Acme Inc" still gets Organization"""
+    table = fill_in_transactor_types(
+        pd.DataFrame(
+            {
+                "full_name": [None, None],
+                "last_name": ["Acme Inc", "Vincent"],
+                "transactor_type": pd.Series([None, None], dtype=object),
+            }
+        )
+    )
+    assert table["transactor_type"].tolist() == ["Organization", "Unknown"]
+    assert table["transactor_type_inferred"].tolist() == [True, False]
+
+
 NAME_COLUMNS = [
     "full_name",
     "first_name",
@@ -293,6 +308,21 @@ def test_supplied_name_parts_are_kept_and_only_the_missing_one_filled():
     ]
 
 
+def test_a_full_name_put_in_the_last_name_field_is_split_up():
+    """A comma last name with no first or full name is the whole name"""
+    table = clean_individuals_names(names_table([{"last_name": "Public, Jane Q"}]))
+    assert name_parts(
+        table, ["full_name", "first_name", "middle_name", "last_name"]
+    ) == [
+        {
+            "full_name": "Public, Jane Q",
+            "first_name": "Jane",
+            "middle_name": "Q",
+            "last_name": "Public",
+        }
+    ]
+
+
 def test_all_missing_parts_are_filled_when_first_and_last_are_missing():
     """With no first or last name, the full name fills every missing part"""
     table = clean_individuals_names(
@@ -329,18 +359,24 @@ def test_digits_and_symbols_are_dropped_from_parsed_name_parts():
 
 
 def test_parsed_address_parts_fill_gaps_without_replacing_supplied_values():
-    """Supplied city, state and zip are kept; unit and PO box reach the schema"""
+    """Supplied city, state and zip are kept; unit and PO box reach the schema
+
+    City and state come out in one case however the state wrote them, a
+    supplied zip that isn't one is filled from the address, and an address
+    with no city or state leaves them missing.
+    """
     addresses = pd.DataFrame(
         {
             "full_address": [
                 "123 N Main St Apt 4B, Chicago, IL 60601",
                 "PO Box 77, Springfield, IL 62701-1234",
+                None,
             ],
-            "line_1": None,
+            "line_1": [None, None, "1 Example St"],
             "line_2": None,
-            "city": ["CHICAGO", None],
-            "state": [None, None],
-            "zipcode": ["60602", None],
+            "city": ["CHICAGO", "springfield   ", None],
+            "state": [None, "il", None],
+            "zipcode": ["60602-1111", "N/A", None],
         }
     )
     cleaned = clean_address(addresses)
@@ -356,8 +392,8 @@ def test_parsed_address_parts_fill_gaps_without_replacing_supplied_values():
     values = cleaned[columns].astype(object)
     assert values.where(values.notna(), None).to_dict("records") == [
         {
-            "city": "CHICAGO",  # supplied
-            "state": "IL",  # parsed, written like states write it
+            "city": "Chicago",  # supplied, in one case
+            "state": "IL",  # parsed
             "zipcode": "60602",  # supplied, though the address says 60601
             "street_name": "main",
             "secondary_address_identifier": "apartment",
@@ -365,14 +401,44 @@ def test_parsed_address_parts_fill_gaps_without_replacing_supplied_values():
             "po_box": None,
         },
         {
-            "city": "Springfield",
-            "state": "IL",
-            "zipcode": "62701",
+            "city": "Springfield",  # supplied, stripped
+            "state": "IL",  # supplied
+            "zipcode": "62701",  # parsed, since "N/A" isn't a zip
             "street_name": None,
             "secondary_address_identifier": None,
             "secondary_address_number": None,
             "po_box": "77",
         },
+        {
+            "city": None,
+            "state": None,
+            "zipcode": None,
+            "street_name": "example",
+            "secondary_address_identifier": None,
+            "secondary_address_number": None,
+            "po_box": None,
+        },
+    ]
+
+
+def test_a_zip_read_as_a_number_is_not_mistaken_for_a_unit_number():
+    """With no city or state, a "2139.0" zip stays out of the unit columns"""
+    addresses = pd.DataFrame(
+        {
+            "full_address": [None, None],
+            "line_1": ["500 Elm Ave Apt 3", "PO Box 42"],
+            "line_2": None,
+            "city": None,
+            "state": None,
+            "zipcode": ["2139.0", "60601.0"],
+        }
+    ).astype("string")
+    cleaned = clean_address(addresses)
+    columns = ["zipcode", "secondary_address_number", "po_box"]
+    values = cleaned[columns].astype(object)
+    assert values.where(values.notna(), None).to_dict("records") == [
+        {"zipcode": "02139", "secondary_address_number": "3", "po_box": None},
+        {"zipcode": "60601", "secondary_address_number": None, "po_box": "42"},
     ]
 
 
@@ -407,15 +473,20 @@ def test_win_reads_true_false_and_missing_values_correctly(tmp_path):
     schema = DataSchema(DEFAULT_SCHEMA_PATH).schema["ElectionResult"]
     results = pd.DataFrame(
         {
-            "id": ["a", "b", "c", "d", "e", "f"],
+            "id": list("abcdefghi"),
             "candidate_id": "c1",
             "election_id": "e1",
-            "win": pd.Series(["False", None, "TRUE", "n", 1, False], dtype=object),
+            # "1.0" is how a whole number written from a float column reads
+            # back from CSV
+            "win": pd.Series(
+                ["False", None, "TRUE", "n", 1, False, "1.0", "0.0", " true "],
+                dtype=object,
+            ),
         }
     )
     cleaned = clean_table_columns(results, schema)
     assert str(cleaned["win"].dtype) == "boolean"
-    expected = [False, None, True, False, True, False]
+    expected = [False, None, True, False, True, False, True, False, True]
     assert (
         cleaned["win"].astype(object).where(cleaned["win"].notna(), None).tolist()
         == expected

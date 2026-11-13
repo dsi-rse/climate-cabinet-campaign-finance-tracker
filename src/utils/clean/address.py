@@ -1,6 +1,7 @@
 """Functions for cleaning and standardizing addresses"""
 
 import re
+from collections.abc import Callable
 
 import pandas as pd
 import usaddress
@@ -168,19 +169,37 @@ def parse_usaddress_simple_expand(address_row: pd.Series) -> dict:
     return parsed
 
 
-# How a parsed value is written when it fills a gap in a column the state
-# also supplies, to match how states write them ("Chicago", "IL"). Parsed
-# parts are lowercased so they can be looked up in utils.clean.mappings.
-_PARSED_VALUE_CASE = {"city": str.title, "state": str.upper}
+# One way of writing each column that states supply in different cases
+# ("CHICAGO", "chicago"), so record linkage can match on it exactly. Other
+# parsed parts stay lowercase so they can be looked up in utils.clean.mappings.
+_COLUMN_CASE = {"city": str.title, "state": str.upper}
+
+
+def _with_one_case(values: pd.Series, case: Callable[[str], str]) -> pd.Series:
+    """Strip each value and write it in one case, keeping missing values
+
+    Args:
+        values: Text column, possibly with surrounding spaces.
+        case: How to write each value, such as str.title.
+
+    Returns:
+        The column with every value stripped and in that case; values that
+        were empty or only spaces become missing.
+    """
+    return values.astype(object).map(
+        lambda value: case(str(value).strip()) or None, na_action="ignore"
+    )
 
 
 def clean_address(address_df: pd.DataFrame) -> pd.DataFrame:
     """Clean an address dataframe.
 
     Each address is parsed with usaddress. Parsed parts fill only values the
-    state left missing: a supplied city, state or zip is never replaced.
+    state left missing: a supplied city, state or zip is never replaced. A
+    supplied zip is cleaned first, so one that isn't a zip counts as missing.
     Parts the state doesn't supply (street name, unit, PO box, ...) go to
-    their own schema columns.
+    their own schema columns. City and state are then written in one case
+    (title and upper) whether the state supplied them or the parse did.
 
     Args:
         address_df: A DataFrame containing address columns.
@@ -190,6 +209,10 @@ def clean_address(address_df: pd.DataFrame) -> pd.DataFrame:
         pd.DataFrame: A DataFrame with cleaned address components.
     """
     address_df["full_address"] = address_df["full_address"].apply(clean_address_string)
+    # before parsing, so a zip read as "60601.0" isn't tagged as a unit
+    # number in the address string
+    if "zipcode" in address_df.columns:
+        address_df["zipcode"] = address_df["zipcode"].apply(clean_zipcode)
 
     expanded_addresses_df = address_df.apply(
         parse_usaddress_simple_expand, axis=1, result_type="expand"
@@ -231,14 +254,14 @@ def clean_address(address_df: pd.DataFrame) -> pd.DataFrame:
     # Keep what the state supplied; parsed values only fill missing ones
     for col in expanded_addresses_df.columns:
         parsed_values = expanded_addresses_df[col]
-        if col in _PARSED_VALUE_CASE:
-            parsed_values = parsed_values.map(
-                _PARSED_VALUE_CASE[col], na_action="ignore"
-            )
         if col in address_df.columns:
             address_df[col] = address_df[col].combine_first(parsed_values)
         else:
             address_df[col] = parsed_values
+    # a parsed zip that filled a gap may be zip+4
     if "zipcode" in address_df.columns:
         address_df["zipcode"] = address_df["zipcode"].apply(clean_zipcode)
+    for col, case in _COLUMN_CASE.items():
+        if col in address_df.columns:
+            address_df[col] = _with_one_case(address_df[col], case)
     return address_df
