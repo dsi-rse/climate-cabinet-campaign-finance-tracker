@@ -5,19 +5,32 @@ import re
 import nameparser
 import pandas as pd
 
+from utils.normalize import combine_rows_sharing_an_id
+
+# Words that mark a name as an organization's. Each is matched as a whole
+# word, ignoring case, so "inc" matches "Acme Inc" but not "Vincent", and
+# "pac" matches "Friends of Bob PAC" but not "Spacek".
 company_name_patterns = [
     r"inc",
+    r"incorporated",
     r"llc",
+    r"llp",
     r"ltd",
     r"corp",
+    r"corporation",
+    r"company",
     r"committee",
     r"party",
+    r"caucus",
     r"foundation",
     r"union",
-    r"associat",
-    r"[0-9]",
-    r"\wPAC\w",
+    r"associat\w*",
+    r"pac",
+    r"fund",
+    r"friends of",
+    r"citizens for",
 ]
+_ORGANIZATION_NAME_REGEX = rf"\b(?:{'|'.join(company_name_patterns)})\b"
 
 
 def _clean_name_components(
@@ -29,13 +42,12 @@ def _clean_name_components(
         name_components: A dictionary with keys: prefix, first_name, middle_name, last_name, suffix, nickname
 
     """
-    # remove non standard name characters
-    # (only letters, spaces, hyphens, and apostrophes)
+    # keep letters in any alphabet ("José", "Nuñez"), spaces, hyphens and
+    # apostrophes; drop digits, underscores and other symbols
     for key, value in name_components.items():
         if value is not None:
-            name_components[key] = re.sub(r"[^a-zA-Z\s'-]", "", value)
-        if value == "":
-            name_components[key] = None
+            value = re.sub(r"[^\w\s'\u2019-]|[\d_]", "", value)
+        name_components[key] = value or None
     return name_components
 
 
@@ -72,7 +84,14 @@ def divide_full_name_nameparser(full_name: str) -> dict[str, str | None]:
 
 
 def clean_individuals_names(names: pd.DataFrame) -> pd.DataFrame:
-    """Attempt to properly parse names into components
+    """Fill in missing name parts by parsing the full name
+
+    Name parts the state supplied are never replaced:
+    - if both first_name and last_name are missing, every missing part
+      (first, middle, last, prefix, suffix, preferred) is filled from the
+      parsed full_name
+    - if only one of them is missing, only that one is filled, so a supplied
+      first name like "Mary Ann" isn't split into first and middle names
 
     Args:
         names: A dataframe with columns:
@@ -80,9 +99,7 @@ def clean_individuals_names(names: pd.DataFrame) -> pd.DataFrame:
             name_suffix, name_preferred
 
     Returns:
-        pd.DataFrame: A dataframe with columns:
-            full_name, first_name, middle_name, last_name, name_prefix,
-            name_suffix, name_preferred
+        pd.DataFrame: names with missing parts filled in.
     """
     names = names.copy()
     if names.empty:
@@ -97,18 +114,22 @@ def clean_individuals_names(names: pd.DataFrame) -> pd.DataFrame:
     names.loc[likely_full_names, "full_name"] = names.loc[
         likely_full_names, "last_name"
     ]
-    # use a name parser to get components of full names where they are
-    # not already provided
-    missing_name_parts = names["full_name"].notna() & (
-        names["first_name"].isna() | names["last_name"].isna()
-    )
+    # that last name was the whole name, so it is missing too and gets filled
+    names.loc[likely_full_names, "last_name"] = None
+    first_missing = names["first_name"].isna().to_numpy()
+    last_missing = names["last_name"].isna().to_numpy()
+    to_parse = names["full_name"].notna().to_numpy() & (first_missing | last_missing)
+    if not to_parse.any():
+        return names
 
-    # divide full names into components
-    name_components = names[missing_name_parts]["full_name"].apply(
-        divide_full_name_nameparser,  # result_type="expand"
+    parsed = pd.DataFrame(
+        [divide_full_name_nameparser(name) for name in names["full_name"][to_parse]]
     )
-
-    name_components = pd.DataFrame(name_components.tolist())
+    # positions within the parsed rows; matched by position because the
+    # table's index can repeat labels
+    both_missing = (first_missing & last_missing)[to_parse]
+    only_first_missing = (first_missing & ~last_missing)[to_parse]
+    only_last_missing = (last_missing & ~first_missing)[to_parse]
     name_columns = [
         "first_name",
         "middle_name",
@@ -117,41 +138,72 @@ def clean_individuals_names(names: pd.DataFrame) -> pd.DataFrame:
         "name_suffix",
         "name_preferred",
     ]
-    for col in name_columns:
-        if col in name_components.columns:
-            names.loc[missing_name_parts, col] = name_components[col].to_numpy()
-
+    for column in name_columns:
+        current = names[column].to_numpy(dtype=object)[to_parse]
+        fill = pd.isna(current) & both_missing
+        if column == "first_name":
+            fill |= only_first_missing
+        elif column == "last_name":
+            fill |= only_last_missing
+        current[fill] = parsed[column].to_numpy(dtype=object)[fill]
+        values = names[column].to_numpy(dtype=object).copy()
+        values[to_parse] = current
+        names[column] = values
     return names
 
 
 def fill_in_transactor_types(names: pd.DataFrame) -> pd.DataFrame:
-    """Fill in transactor types based on name components
+    """Fill in missing transactor types from the name
+
+    A type the state supplied is never changed. A missing type becomes
+    "Organization" when full_name or last_name contains a word from
+    company_name_patterns, and "Unknown" otherwise.
 
     Args:
-        names: A dataframe with columns:
-            full_name, first_name, middle_name, last_name, name_prefix,
-            name_suffix, name_preferred
+        names: A dataframe with columns full_name, last_name and
+            transactor_type.
+
+    Returns:
+        names with transactor_type filled in, and transactor_type_inferred
+        True where the type came from the name rather than the state.
     """
-    possible_org_names = names[["full_name", "last_name"]]
-    pattern = "|".join(company_name_patterns)
-    contains_any = possible_org_names.apply(
-        lambda col: col.astype("string").str.contains(pattern, case=False, na=False)
+    missing_type = names["transactor_type"].isna()
+    looks_like_organization = (
+        names[["full_name", "last_name"]]
+        .apply(
+            lambda col: col.astype("string").str.contains(
+                _ORGANIZATION_NAME_REGEX, case=False, na=False, regex=True
+            )
+        )
+        .any(axis=1)
     )
-    probable_organization_mask = contains_any.any(axis=1)
-    names.loc[probable_organization_mask, "transactor_type"] = "Organization"
+    inferred = missing_type & looks_like_organization
+    names.loc[inferred, "transactor_type"] = "Organization"
     names["transactor_type"] = names["transactor_type"].fillna("Unknown")
-    # TODO: improve transactor_type prediction
+    names["transactor_type_inferred"] = inferred.to_numpy()
     return names
 
 
 def clean_phone_number(val: object) -> str | None:
-    """Convert phone numbers to strings of only digits or None"""
+    """Convert a phone number to a string of only its digits
+
+    A phone number read as a number (3125551212.0) or written from one
+    ("3125551212.0") loses the ".0" first, so it doesn't gain a digit.
+
+    Args:
+        val: A phone number as text or a number.
+
+    Returns:
+        The digits, or None if there are none.
+    """
     if pd.isna(val):
         return None
-    string_phone_number = str(val)
-    # strip non-numeric characters
-    string_phone_number = re.sub(r"\D", "", string_phone_number)
-    return string_phone_number
+    if isinstance(val, float) and val.is_integer():
+        val = int(val)
+    text = str(val).strip()
+    if re.fullmatch(r"\d+\.0+", text):
+        text = text.split(".")[0]
+    return re.sub(r"\D", "", text) or None
 
 
 def clean_names(transactors: pd.DataFrame) -> pd.DataFrame:
@@ -182,7 +234,8 @@ def clean_transactors(transactors: pd.DataFrame) -> pd.DataFrame:
             full_name, first_name, middle_name, last_name, name_prefix,
             name_suffix, name_preferred, phone_number
     """
-    transactors = transactors.drop_duplicates(subset=["id"], keep="first")
+    # combine rows sharing an id, keeping each column's first non-null value
+    transactors = combine_rows_sharing_an_id(transactors, "Transactor")
     # fill in transactor types
     transactors = fill_in_transactor_types(transactors)
     transactors = clean_names(transactors)

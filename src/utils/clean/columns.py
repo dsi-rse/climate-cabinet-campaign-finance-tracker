@@ -1,11 +1,52 @@
 """Ensure all columns are present in the correct type"""
 
+import warnings
+
 import pandas as pd
 
 from utils.schema import DataSchema, TableSchema, parse_decimal_type
 
 # How many out-of-range values a decimal error lists
 _MAX_LISTED_OUT_OF_RANGE = 5
+
+# Schema types held as pandas' nullable "boolean", and the text read as each
+# value (compared ignoring case and surrounding spaces)
+_BOOLEAN_TYPES = ("bool", "boolean")
+_TRUE_TEXT = frozenset({"true", "t", "yes", "y", "1", "1.0"})
+_FALSE_TEXT = frozenset({"false", "f", "no", "n", "0", "0.0"})
+# How many unreadable values a boolean warning lists
+_MAX_LISTED_UNREADABLE = 5
+
+
+def _to_boolean_column(values: pd.Series, column_name: str) -> pd.Series:
+    """Convert a column to pandas' nullable boolean type without guessing
+
+    astype(bool) treats any non-empty text, and missing values, as True, so
+    "False" and nulls both became True. Here, booleans and the numbers 1 and 0
+    keep their meaning, text is read from _TRUE_TEXT and _FALSE_TEXT, and
+    missing values stay missing.
+
+    Args:
+        values: The column to convert.
+        column_name: Name of the column, used in the warning.
+
+    Returns:
+        The column as "boolean". Values that can't be read become missing,
+        and a warning lists how many there were, with examples.
+    """
+    text = values.astype("string").str.strip().str.lower()
+    result = pd.Series(pd.NA, index=values.index, dtype="boolean")
+    result[text.isin(_TRUE_TEXT).fillna(False).to_numpy()] = True
+    result[text.isin(_FALSE_TEXT).fillna(False).to_numpy()] = False
+    unreadable = values.notna().to_numpy() & result.isna().to_numpy()
+    if unreadable.any():
+        examples = values[unreadable].astype(str).unique()[:_MAX_LISTED_UNREADABLE]
+        warnings.warn(
+            f"{int(unreadable.sum())} values in {column_name!r} are not true or"
+            f" false and became null: {list(examples)}",
+            stacklevel=3,
+        )
+    return result
 
 
 def _to_decimal_column(
@@ -51,7 +92,8 @@ def clean_table_columns(
 
     Returns:
         Cleaned dataframe with all columns present and in the correct type.
-        Columns of type "decimal(p,s)" are Float64 rounded to s places.
+        Columns of type "decimal(p,s)" are Float64 rounded to s places, and
+        columns of type "bool" are pandas' nullable "boolean".
 
     Raises:
         ValueError: if a decimal column has a value too large for its type
@@ -65,6 +107,10 @@ def clean_table_columns(
         if decimal_type is not None:
             table_data[column_name] = _to_decimal_column(
                 table_data[column_name], column_name, *decimal_type
+            )
+        elif column_type in _BOOLEAN_TYPES:
+            table_data[column_name] = _to_boolean_column(
+                table_data[column_name], column_name
             )
         elif pd.api.types.is_integer_dtype(pd.api.types.pandas_dtype(column_type)):
             # through numbers first, so text like "2020.0" (a whole number

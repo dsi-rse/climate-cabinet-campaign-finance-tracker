@@ -23,6 +23,7 @@ _TYPE_MAP: dict[str, str] = {
     "Float32": "REAL",
     "Float64": "DOUBLE",
     "bool": "BOOLEAN",
+    "boolean": "BOOLEAN",
     "datetime64[ns]": "TIMESTAMP",
     "date": "DATE",
 }
