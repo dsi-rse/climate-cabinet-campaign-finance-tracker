@@ -3,8 +3,9 @@
 Linkage never changes the source tables. Each run is recorded in append-only
 tables, so every merge can be checked or undone:
 
-- linkage_run: one row per run, with when it ran, the threshold, the model
-  file's hash, and the splink version and git commit that produced it
+- linkage_run: one row per run, with a run number that counts up, when it
+  ran, the threshold, the model file's hash, and the splink version and git
+  commit that produced it
 - linkage_prediction: every pair of records the model scored at or above the
   threshold, with its match probability and weight
 - linkage_mapping_history: for every record in the run, the canonical id of
@@ -20,12 +21,23 @@ Two methods link records:
   their names match once case, punctuation and legal endings like "Inc" or
   "LLC" are ignored (see ORGANIZATION_NAME_KEY_SQL)
 
+Records linked by either method are clustered together, so a record that a
+Splink match and a name match both touch ends up in one cluster, and every
+canonical id is its own canonical id. A record's method is organization_name
+if it is in a group of matching names, splink if only the model linked it,
+and NULL if it is the canonical record itself.
+
 On top of these:
 
 - the view linkage_mapping holds the latest run's mapping (old_id,
-  canonical_id), under the name the mapping table used to have
+  canonical_id), under the name the mapping table used to have. A table of
+  that name written by the old in-place linkage is renamed
+  linkage_mapping_legacy the first time the new linkage runs
 - for each table that refers to Transactor ids, a view <table>_canonical has
-  the same rows with those ids replaced by their canonical id
+  the same rows with those ids replaced by their canonical id.
+  Transactor_canonical keeps one row per canonical id (the canonical record's
+  own row), so joining it on id doesn't repeat rows; the other members'
+  rows are reachable through linkage_mapping
 """
 
 import json
@@ -45,15 +57,24 @@ LINKAGE_PREDICTION_TABLE = "linkage_prediction"
 LINKAGE_MAPPING_HISTORY_TABLE = "linkage_mapping_history"
 # a view of the latest run's mapping, under the old mapping table's name
 LINKAGE_MAPPING_TABLE = "linkage_mapping"
+# where a linkage_mapping table written by the old in-place linkage is moved
+LINKAGE_MAPPING_LEGACY_TABLE = "linkage_mapping_legacy"
 CANONICAL_VIEW_SUFFIX = "_canonical"
 # Splink's working tables, dropped once a run has been recorded
 _SPLINK_TABLE_PREFIX = "__splink__"
 
+# started_at and finished_at are UTC, like the times in _run_manifest.json.
+# They are plain TIMESTAMPs because reading a TIMESTAMPTZ into Python needs
+# pytz, which isn't installed on Python 3.11 and later.
 _CREATE_LINKAGE_TABLES = f"""
+    CREATE SEQUENCE IF NOT EXISTS {LINKAGE_RUN_TABLE}_number;
     CREATE TABLE IF NOT EXISTS {LINKAGE_RUN_TABLE} (
         run_id VARCHAR PRIMARY KEY,
-        started_at TIMESTAMPTZ,
-        finished_at TIMESTAMPTZ,
+        -- counts up with each run; the latest run is the highest number
+        -- (started_at is only to the second, so two runs can share one)
+        run_number BIGINT DEFAULT nextval('{LINKAGE_RUN_TABLE}_number'),
+        started_at TIMESTAMP,
+        finished_at TIMESTAMP,
         table_name VARCHAR,
         threshold DOUBLE,
         model_path VARCHAR,
@@ -164,9 +185,26 @@ def predict_and_cluster(
 def create_linkage_tables(con: duckdb.DuckDBPyConnection) -> None:
     """Create the linkage run, prediction and mapping history tables if missing
 
+    A linkage_mapping table left by the old in-place linkage is renamed
+    LINKAGE_MAPPING_LEGACY_TABLE, since linkage_mapping is now a view.
+
     Args:
         con: DuckDB connection.
     """
+    mapping_type = con.execute(
+        "SELECT table_type FROM information_schema.tables WHERE table_name = ?",
+        [LINKAGE_MAPPING_TABLE],
+    ).fetchone()
+    if mapping_type is not None and mapping_type[0] == "BASE TABLE":
+        con.execute(
+            f"ALTER TABLE {LINKAGE_MAPPING_TABLE}"
+            f" RENAME TO {LINKAGE_MAPPING_LEGACY_TABLE}"
+        )
+        print(
+            f"Renamed the {LINKAGE_MAPPING_TABLE} table from an earlier linkage"
+            f" to {LINKAGE_MAPPING_LEGACY_TABLE}; {LINKAGE_MAPPING_TABLE} is now"
+            " a view of the latest run."
+        )
     con.execute(_CREATE_LINKAGE_TABLES)
 
 
@@ -175,7 +213,13 @@ def create_canonical_views(con: duckdb.DuckDBPyConnection) -> None:
 
     linkage_mapping holds the latest run's (old_id, canonical_id) pairs. For
     each table that refers to Transactor ids, <table>_canonical has the same
-    rows, with each of those id columns replaced by its canonical id.
+    rows, with each of those id columns replaced by its canonical id. The
+    table whose own id is replaced (Transactor) keeps only the canonical
+    records' rows, so the view has one row per canonical id.
+
+    Every table's canonical view is dropped first, so a view over a table
+    that is no longer in the database (after loading fewer states) doesn't
+    stay behind.
 
     Args:
         con: DuckDB connection that has the linkage tables.
@@ -186,11 +230,14 @@ def create_canonical_views(con: duckdb.DuckDBPyConnection) -> None:
         FROM {LINKAGE_MAPPING_HISTORY_TABLE}
         WHERE run_id = (
             SELECT run_id FROM {LINKAGE_RUN_TABLE}
-            ORDER BY started_at DESC, run_id DESC
+            ORDER BY run_number DESC
             LIMIT 1
         )
     """)
-    for table_name, id_columns in get_all_id_references("Transactor").items():
+    id_references = get_all_id_references("Transactor")
+    for table_name in id_references:
+        con.execute(f'DROP VIEW IF EXISTS "{table_name}{CANONICAL_VIEW_SUFFIX}"')
+    for table_name, id_columns in id_references.items():
         if not id_columns or not table_exists(con, table_name):
             continue
         columns = [
@@ -209,12 +256,19 @@ def create_canonical_views(con: duckdb.DuckDBPyConnection) -> None:
             f' ON t."{column}" = m_{column}.old_id'
             for column in id_columns
         )
+        # one row per canonical id: a merged record's own row is left out
+        canonical_rows_only = (
+            'WHERE m_id.canonical_id IS NULL OR m_id.canonical_id = t."id"'
+            if "id" in id_columns
+            else ""
+        )
         con.execute(f"""
-            CREATE OR REPLACE VIEW "{table_name}{CANONICAL_VIEW_SUFFIX}" AS
+            CREATE VIEW "{table_name}{CANONICAL_VIEW_SUFFIX}" AS
             SELECT
                 {select_list}
             FROM "{table_name}" AS t
             {joins}
+            {canonical_rows_only}
         """)
 
 
@@ -288,39 +342,103 @@ def record_linkage_run(
             """,
             [run["run_id"]],
         )
-        # an organization in a group of matching names takes the group's id;
-        # every other record takes its Splink cluster's id
+        labels_table = _cluster_both_methods(con, clusters_table, run["table_name"])
         con.execute(
             f"""
-            WITH clusters AS (
-                SELECT DISTINCT
-                    CAST(id AS VARCHAR) AS id,
-                    CAST(cluster_id AS VARCHAR) AS cluster_id
-                FROM {clusters_table}
-            ),
-            organizations AS ({_organization_groups_sql(con, run["table_name"])})
             INSERT INTO {LINKAGE_MAPPING_HISTORY_TABLE}
             SELECT
                 ?,
-                c.id,
-                CASE WHEN o.group_size > 1 THEN o.org_canonical_id
-                    ELSE c.cluster_id END,
+                id,
+                label,
                 CASE
-                    WHEN o.group_size > 1 AND o.org_canonical_id <> c.id
-                        THEN 'organization_name'
-                    WHEN coalesce(o.group_size, 1) = 1 AND c.cluster_id <> c.id
-                        THEN 'splink'
+                    WHEN label = id THEN NULL
+                    WHEN name_group <> id THEN 'organization_name'
+                    ELSE 'splink'
                 END
-            FROM clusters c
-            LEFT JOIN organizations o USING (id)
+            FROM {labels_table}
             """,
             [run["run_id"]],
         )
+        con.execute(f"DROP TABLE {labels_table}")
         create_canonical_views(con)
         con.execute("COMMIT")
     except BaseException:
         con.execute("ROLLBACK")
         raise
+
+
+def _cluster_both_methods(
+    con: duckdb.DuckDBPyConnection, clusters_table: str, table_name: str
+) -> str:
+    """Put records linked by Splink or by organization name in one cluster
+
+    Each record starts with the smaller of its Splink cluster id and its name
+    group's id. Labels then spread: every record takes the smallest label in
+    its Splink cluster and in its name group, until nothing changes. Records
+    joined by any chain of either kind of link end with the same label, the
+    smallest id among them, so a canonical id is always its own canonical id.
+
+    Args:
+        con: DuckDB connection with Splink's cluster table.
+        clusters_table: Table Splink wrote the clusters to (id, cluster_id).
+        table_name: Table linkage ran on, for the organization names.
+
+    Returns:
+        The name of a temporary table with id, cluster_id, name_group (the
+        group's smallest id, or the record's own id when it is in no group)
+        and label (the canonical id).
+    """
+    labels, next_labels = "_linkage_labels", "_linkage_labels_next"
+    con.execute(
+        f"""
+        CREATE OR REPLACE TEMP TABLE {labels} AS
+        WITH clusters AS (
+            SELECT DISTINCT
+                CAST(id AS VARCHAR) AS id,
+                CAST(cluster_id AS VARCHAR) AS cluster_id
+            FROM {clusters_table}
+        ),
+        organizations AS ({_organization_groups_sql(con, table_name)})
+        SELECT
+            c.id,
+            c.cluster_id,
+            CASE WHEN o.group_size > 1 THEN o.org_canonical_id ELSE c.id END
+                AS name_group,
+            least(
+                c.cluster_id,
+                CASE WHEN o.group_size > 1 THEN o.org_canonical_id ELSE c.id END
+            ) AS label
+        FROM clusters c
+        LEFT JOIN organizations o USING (id)
+        """
+    )
+    while True:
+        con.execute(
+            f"""
+            CREATE OR REPLACE TEMP TABLE {next_labels} AS
+            SELECT
+                id,
+                cluster_id,
+                name_group,
+                least(
+                    min(label) OVER (PARTITION BY cluster_id),
+                    min(label) OVER (PARTITION BY name_group)
+                ) AS label
+            FROM {labels}
+            """
+        )
+        (changed,) = con.execute(
+            f"""
+            SELECT count(*)
+            FROM {labels} AS before
+            JOIN {next_labels} AS after USING (id)
+            WHERE before.label <> after.label
+            """
+        ).fetchone()
+        labels, next_labels = next_labels, labels
+        if changed == 0:
+            con.execute(f"DROP TABLE {next_labels}")
+            return labels
 
 
 def drop_splink_tables(con: duckdb.DuckDBPyConnection) -> None:
