@@ -116,13 +116,53 @@ def test_new_cleaned_data_is_loaded_on_the_next_run(data_directory):
     """
     link(data_directory, "--states", "tx")
     database_path = data_directory / "linked" / DEFAULT_DATABASE_NAME
-    before = query(database_path, 'SELECT count(*) FROM "Transaction"')[0][0]
+    counts_sql = (
+        'SELECT (SELECT count(*) FROM "Transactor"),'
+        " (SELECT count(*) FROM transactor_detailed_view)"
+    )
+    [(transactors, view_rows)] = query(database_path, counts_sql)
+    assert transactors == view_rows > 0
 
-    (data_directory / "cleaned" / "tx" / "Transaction.parquet").unlink()
+    # clean writes one more transactor
+    transactor_file = data_directory / "cleaned" / "tx" / "Transactor.parquet"
+    new_file = transactor_file.with_suffix(".new.parquet")
+    con = connect_duckdb(":memory:")
+    con.execute(
+        f"""
+        COPY (
+            SELECT * FROM read_parquet('{transactor_file}')
+            UNION ALL
+            (
+                SELECT * REPLACE ('new transactor' AS id)
+                FROM read_parquet('{transactor_file}') LIMIT 1
+            )
+        ) TO '{new_file}' (FORMAT PARQUET)
+        """
+    )
+    con.close()
+    new_file.replace(transactor_file)
     link(data_directory, "--states", "tx")
 
+    assert query(database_path, counts_sql) == [(transactors + 1, view_rows + 1)]
+
+
+def test_a_state_with_no_cleaned_data_stops_the_run_before_dropping_anything(
+    data_directory,
+):
+    """A --states value with no cleaned folder fails and keeps the database as it was
+
+    Args:
+        data_directory: Data folder with cleaned TX and MN data.
+    """
+    link(data_directory)
+    database_path = data_directory / "linked" / DEFAULT_DATABASE_NAME
+    before = query(database_path, 'SELECT count(*) FROM "Transactor"')[0][0]
+
+    with pytest.raises(ValueError, match="zz"):
+        link(data_directory, "--states", "tx", "zz")
+
     assert before > 0
-    assert query(database_path, "SHOW TABLES").count(("Transaction",)) == 0
+    assert query(database_path, 'SELECT count(*) FROM "Transactor"') == [(before,)]
 
 
 def test_only_the_requested_states_are_loaded(data_directory):

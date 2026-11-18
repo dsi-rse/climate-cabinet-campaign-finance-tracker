@@ -201,9 +201,13 @@ def test_tied_addresses_are_picked_whole_and_the_same_way_every_time(con):
             ('p1', 'oak ave', 'Austin', NULL),
             ('p1', 'main st', 'Reno',   NULL),
             ('p2', 'elm rd',  'Denver', DATE '2020-01-01'),
-            ('p2', 'pine ct', 'Boise',  DATE '2024-01-01')
+            ('p2', 'pine ct', 'Boise',  DATE '2024-01-01'),
+            ('p3', 'zoo rd',  'Tulsa',  DATE '2024-01-01'),
+            ('p3', 'ash ln',  'Waco',   DATE '2020-01-01'),
+            ('p3', 'ash ln',  'Waco',   DATE '2020-01-01')
         """
     )
+    con.execute("INSERT INTO Transactor VALUES ('p3', 'Cal')")
     picks = []
     for _ in range(3):
         create_transactor_detailed_view(con)
@@ -213,8 +217,19 @@ def test_tied_addresses_are_picked_whole_and_the_same_way_every_time(con):
                 " FROM transactor_detailed_view ORDER BY id"
             ).fetchall()
         )
-    # p1: no dates, so alphabetical; p2: the latest address
-    assert picks == [[("p1", "main st", "reno"), ("p2", "pine ct", "boise")]] * 3
+    # p1: no dates, so alphabetical; p2: the latest address; p3: the most
+    # common address, even though the other is later
+    assert (
+        picks
+        == [
+            [
+                ("p1", "main st", "reno"),
+                ("p2", "pine ct", "boise"),
+                ("p3", "ash ln", "waco"),
+            ]
+        ]
+        * 3
+    )
 
 
 def test_compared_text_columns_are_lowercased(con):

@@ -259,26 +259,49 @@ def create_database_from_nested_parquet_directories(
         DuckDB connection
 
     Raises:
+        ValueError: if a requested state has no folder, or there are no
+            table files to load. Nothing is dropped in that case.
         RuntimeError: if any table file fails to load. Every failure is
             listed, after all the other files have been tried.
     """
+    # skip files and hidden folders, such as a staging folder left by a
+    # step that was killed (see utils.io.staged_directory)
+    state_dirs = [
+        state_dir
+        for state_dir in sorted(database_dir.iterdir())
+        if state_dir.is_dir() and not state_dir.name.startswith(".")
+    ]
+    if states:
+        wanted_states = {state.lower() for state in states}
+        found_states = {state_dir.name.lower() for state_dir in state_dirs}
+        missing_states = sorted(wanted_states - found_states)
+        if missing_states:
+            raise ValueError(
+                f"No cleaned data for {', '.join(missing_states)} in {database_dir}."
+                " Run clean for those states first, or leave them out of --states."
+            )
+        state_dirs = [
+            state_dir
+            for state_dir in state_dirs
+            if state_dir.name.lower() in wanted_states
+        ]
+    files = [
+        file for state_dir in state_dirs for file in sorted(state_dir.glob("*.parquet"))
+    ]
+    if not files:
+        raise ValueError(
+            f"No cleaned tables (parquet files) found in {database_dir}. Run clean"
+            " first."
+        )
     con = duckdb.connect(str(database_path))
     source_tables = set(_get_data_schema().schema) | {DETAILED_VIEW_TABLE}
     _drop_relations(con, None if overwrite else source_tables)
-    wanted_states = {state.lower() for state in states} if states else None
     failures = []
-    for state_dir in sorted(database_dir.iterdir()):
-        # skip files and hidden folders, such as a staging folder left by a
-        # step that was killed (see utils.io.staged_directory)
-        if not state_dir.is_dir() or state_dir.name.startswith("."):
-            continue
-        if wanted_states is not None and state_dir.name.lower() not in wanted_states:
-            continue
-        for file in sorted(state_dir.glob("*.parquet")):
-            try:
-                create_or_append_parquet_to_db(con, file)
-            except Exception as error:  # noqa: BLE001 (all reported below)
-                failures.append(f"{state_dir.name}/{file.name}: {error}")
+    for file in files:
+        try:
+            create_or_append_parquet_to_db(con, file)
+        except Exception as error:  # every failure is reported below
+            failures.append(f"{file.parent.name}/{file.name}: {error}")
     for table_name in DETAILED_VIEW_SOURCE_TABLES:
         if not table_exists(con, table_name):
             create_schema_table(con, table_name)
