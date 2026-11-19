@@ -32,6 +32,33 @@ ORGANIZATIONS = [
 ORGANIZATION_WITH_PERSON_NAME = "o7"
 TRANSACTOR_COUNT = 300 + DUPLICATED_PEOPLE + len(ORGANIZATIONS) + 1
 
+# Transfers between filers, as the two filers reported them. The payer
+# ("donor") and the recipient each list the same transfer; the recipient
+# names the payer under its other id (o2 is o1 by name), two days later.
+TRANSFERS = pd.DataFrame(
+    [
+        # one transfer, reported by both sides: the payer's copy goes
+        ("o1", "committee", 500.0, "2024-01-10", "tx", "donor"),
+        ("o2", "committee", 500.0, "2024-01-12", "tx", "recipient"),
+        # reported by the payer only (the recipient isn't a filer): kept
+        ("o1", "committee", 777.0, "2024-01-10", "tx", "donor"),
+        # same parties and amount, but a month apart: both kept
+        ("o1", "committee", 900.0, "2024-02-01", "tx", "donor"),
+        ("o2", "committee", 900.0, "2024-03-05", "tx", "recipient"),
+        # same parties and amount, but reported in another state: both kept
+        ("o1", "committee", 650.0, "2024-01-10", "tx", "donor"),
+        ("o2", "committee", 650.0, "2024-01-10", "mn", "recipient"),
+    ],
+    columns=[
+        "donor_id",
+        "recipient_id",
+        "amount",
+        "date",
+        "reported_state",
+        "reported_by",
+    ],
+).assign(date=lambda frame: pd.to_datetime(frame["date"]))
+
 
 def fake_transactors() -> pd.DataFrame:
     """Build fake transactors, some reported twice under different ids
@@ -113,8 +140,12 @@ def database_path(tmp_path):
             "donor_id": transactors["id"],
             "recipient_id": "committee",
             "amount": 10.0,
+            "date": pd.Timestamp("2024-03-01"),
+            "reported_state": "tx",
+            "reported_by": "recipient",
         }
     )
+    transactions = pd.concat([transactions, TRANSFERS], ignore_index=True)
     con = connect_duckdb(path)
     con.register("transactors", transactors)
     con.register("transactions", transactions)
@@ -291,7 +322,8 @@ def test_transactor_canonical_has_one_row_per_canonical_id(database_path, model_
         'SELECT count(*) AS n FROM "Transaction_canonical" x'
         ' JOIN "Transactor_canonical" t ON x.donor_id = t.id',
     )
-    assert joined["n"].iloc[0] == TRANSACTOR_COUNT
+    # one row per transaction: the fixture's one per transactor plus the transfers
+    assert joined["n"].iloc[0] == TRANSACTOR_COUNT + len(TRANSFERS)
 
 
 def test_every_canonical_id_is_its_own_canonical_id(database_path, model_path):
@@ -404,6 +436,61 @@ def test_canonical_view_of_a_table_no_longer_loaded_is_dropped(
     tables = read(database_path, "SELECT table_name FROM information_schema.tables")
     assert "Transaction_canonical" not in tables["table_name"].tolist()
     assert "Transactor_canonical" in tables["table_name"].tolist()
+
+
+def test_transfers_reported_by_both_filers_are_counted_once(database_path, model_path):
+    """The payer's copy goes when the recipient's copy matches on canonical ids
+
+    o1 and o2 are the same organization (linked by name), so the payer's
+    500 (from o1) and the recipient's 500 (from o2, two days later) are one
+    transfer. The 777 has no recipient copy, the 900s are a month apart and
+    the 650s are in different states, so those stay.
+    """
+    run_linkage(database_path, model_path)
+    source = read(database_path, 'SELECT count(*) AS n FROM "Transaction"')["n"][0]
+    kept = read(
+        database_path,
+        'SELECT amount, reported_by FROM "Transaction_deduplicated"'
+        " WHERE amount <> 10 ORDER BY amount, reported_by",
+    )
+    assert source == TRANSACTOR_COUNT + len(TRANSFERS)
+    assert (
+        read(database_path, 'SELECT count(*) AS n FROM "Transaction_deduplicated"')[
+            "n"
+        ][0]
+        == source - 1
+    )
+    assert kept.to_records(index=False).tolist() == [
+        (500.0, "recipient"),
+        (650.0, "donor"),
+        (650.0, "recipient"),
+        (777.0, "donor"),
+        (900.0, "donor"),
+        (900.0, "recipient"),
+    ]
+    # the kept copy carries the canonical donor id
+    donors = read(
+        database_path,
+        'SELECT DISTINCT donor_id FROM "Transaction_deduplicated" WHERE amount = 500',
+    )
+    assert donors["donor_id"].tolist() == ["o1"]
+
+
+def test_deduplicated_view_needs_reported_by(tmp_path, database_path, model_path):
+    """A Transaction table without the column gets no deduplicated view"""
+    run_linkage(database_path, model_path)
+    con = connect_duckdb(database_path)
+    try:
+        con.execute('ALTER TABLE "Transaction" DROP COLUMN reported_by')
+        predict.create_canonical_views(con)
+        views = con.execute(
+            "SELECT table_name FROM information_schema.tables"
+        ).fetchall()
+    finally:
+        con.close()
+    names = [name for (name,) in views]
+    assert "Transaction_canonical" in names
+    assert "Transaction_deduplicated" not in names
 
 
 def test_failed_run_records_nothing(database_path, model_path):

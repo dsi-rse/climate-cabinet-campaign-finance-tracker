@@ -38,6 +38,13 @@ On top of these:
   Transactor_canonical keeps one row per canonical id (the canonical record's
   own row), so joining it on id doesn't repeat rows; the other members'
   rows are reachable through linkage_mapping
+- Transaction_deduplicated is Transaction_canonical without the payer's copy
+  of a transfer between two filers. Money that moves between filers is
+  reported by both (reported_by says which report a row came from), so it
+  appears twice. A donor-reported row is left out when a recipient-reported
+  row has the same canonical donor and recipient, the same amount and state,
+  and a date within TRANSFER_DATE_WINDOW_DAYS. Only linkage can match the
+  two copies, since each names the other party by name, not id
 """
 
 import json
@@ -60,6 +67,13 @@ LINKAGE_MAPPING_TABLE = "linkage_mapping"
 # where a linkage_mapping table written by the old in-place linkage is moved
 LINKAGE_MAPPING_LEGACY_TABLE = "linkage_mapping_legacy"
 CANONICAL_VIEW_SUFFIX = "_canonical"
+# Transaction_canonical with each filer-to-filer transfer counted once
+DEDUPLICATED_VIEW = "Transaction_deduplicated"
+# The two filers can report a transfer on different days (sent and received,
+# or the dates of their reporting periods); copies this many days apart match
+TRANSFER_DATE_WINDOW_DAYS = 7
+# Columns a Transaction table needs for the deduplicated view
+_DEDUPLICATION_COLUMNS = ("reported_by", "donor_id", "recipient_id", "amount", "date")
 # Splink's working tables, dropped once a run has been recorded
 _SPLINK_TABLE_PREFIX = "__splink__"
 
@@ -219,7 +233,9 @@ def create_canonical_views(con: duckdb.DuckDBPyConnection) -> None:
 
     Every table's canonical view is dropped first, so a view over a table
     that is no longer in the database (after loading fewer states) doesn't
-    stay behind.
+    stay behind. Transaction_deduplicated is built on Transaction_canonical
+    when that table has the columns it needs (see
+    create_deduplicated_transaction_view).
 
     Args:
         con: DuckDB connection that has the linkage tables.
@@ -235,6 +251,7 @@ def create_canonical_views(con: duckdb.DuckDBPyConnection) -> None:
         )
     """)
     id_references = get_all_id_references("Transactor")
+    con.execute(f'DROP VIEW IF EXISTS "{DEDUPLICATED_VIEW}"')
     for table_name in id_references:
         con.execute(f'DROP VIEW IF EXISTS "{table_name}{CANONICAL_VIEW_SUFFIX}"')
     for table_name, id_columns in id_references.items():
@@ -270,6 +287,70 @@ def create_canonical_views(con: duckdb.DuckDBPyConnection) -> None:
             {joins}
             {canonical_rows_only}
         """)
+    create_deduplicated_transaction_view(con)
+
+
+def create_deduplicated_transaction_view(con: duckdb.DuckDBPyConnection) -> None:
+    """Create Transaction_deduplicated: each filer-to-filer transfer counted once
+
+    A transfer between two filers is in Transaction twice: the payer reports
+    it among its expenditures (reported_by = 'donor') and the recipient among
+    its contributions (reported_by = 'recipient'). The view keeps every row of
+    Transaction_canonical except a donor-reported row for which a
+    recipient-reported row exists with the same canonical donor and
+    recipient, the same amount and reported_state, and a date within
+    TRANSFER_DATE_WINDOW_DAYS (both dates missing also matches). The
+    recipient's copy is kept because the recipient's report is where the
+    other states' pipelines already count the money (Minnesota drops the
+    payer's copy at standardize).
+
+    If several donor-reported rows match one recipient-reported row (two
+    identical transfers a few days apart), all of them are left out, so the
+    view can undercount in that rare case.
+
+    Nothing is created if there is no Transaction table or it lacks the
+    columns needed (reported_by, donor_id, recipient_id, amount, date).
+
+    Args:
+        con: DuckDB connection with the canonical views.
+    """
+    source = f"Transaction{CANONICAL_VIEW_SUFFIX}"
+    if not table_exists(con, "Transaction"):
+        return
+    columns = {
+        row[1] for row in con.execute("PRAGMA table_info('Transaction')").fetchall()
+    }
+    if not set(_DEDUPLICATION_COLUMNS) <= columns:
+        print(
+            f"{DEDUPLICATED_VIEW} is not created: Transaction lacks"
+            f" {', '.join(sorted(set(_DEDUPLICATION_COLUMNS) - columns))}"
+        )
+        return
+    same_state = (
+        "AND r.reported_state IS NOT DISTINCT FROM t.reported_state"
+        if "reported_state" in columns
+        else ""
+    )
+    con.execute(f"""
+        CREATE VIEW "{DEDUPLICATED_VIEW}" AS
+        SELECT t.*
+        FROM "{source}" AS t
+        WHERE t.reported_by IS DISTINCT FROM 'donor'
+           OR NOT EXISTS (
+                SELECT 1
+                FROM "{source}" AS r
+                WHERE r.reported_by = 'recipient'
+                  AND r.donor_id = t.donor_id
+                  AND r.recipient_id = t.recipient_id
+                  AND r.amount = t.amount
+                  {same_state}
+                  AND (
+                    (r.date IS NULL AND t.date IS NULL)
+                    OR abs(date_diff('day', r.date, t.date))
+                        <= {TRANSFER_DATE_WINDOW_DAYS}
+                  )
+           )
+    """)
 
 
 def _organization_groups_sql(con: duckdb.DuckDBPyConnection, table_name: str) -> str:
