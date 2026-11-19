@@ -242,6 +242,10 @@ filer:
     - raw_name: AMMEND
       type: str
       notes: bool
+      # Y marks a filing that amends an earlier one. The export holds only the
+      # current version of each filing: in the 2024 file, 997 of 11,211 filings
+      # are amendments and no filer, year and cycle has both an original and an
+      # amendment, so amended filings are not double counted and need no filter.
 
     - raw_name: TERMINATE
       type: str
