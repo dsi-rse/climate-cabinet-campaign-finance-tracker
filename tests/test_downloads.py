@@ -1,5 +1,6 @@
 """Collectors keep the original archives and log where each download came from"""
 
+import contextlib
 import hashlib
 import io
 import zipfile
@@ -12,6 +13,7 @@ import requests
 from utils.collect.downloads import (
     ARCHIVE_DIRECTORY,
     DOWNLOAD_MANIFEST_NAME,
+    DownloadError,
     add_extracted_files,
     archive_path,
     read_download_records,
@@ -221,7 +223,12 @@ def test_michigan_logs_every_download_even_a_bad_archive(
             return fake_response(content=body, url=url)
         return fake_response(content=page.encode())
 
-    with mock.patch.object(michigan.requests, "get", side_effect=fake_get):
+    with (
+        mock.patch.object(michigan.requests, "get", side_effect=fake_get),
+        contextlib.nullcontext()
+        if first_year_is_valid
+        else pytest.raises(DownloadError, match="2001"),
+    ):
         michigan.download_MI_data(output_directory=tmp_path)
 
     (record,) = read_download_records(tmp_path.resolve())
@@ -311,13 +318,16 @@ def test_redirected_download_records_the_requested_url(tmp_path, fake_response):
 
 
 def test_texas_logs_a_download_whose_zip_is_bad(tmp_path, fake_response):
-    """A zip that can't be opened is still kept and logged, with no files
+    """A zip that can't be opened is kept and logged, then the run fails
 
     Args:
         tmp_path: Temporary directory for this test (pytest fixture).
         fake_response: Builds a requests.Response (fixture).
     """
-    run_tx_collector(tmp_path, b"not a zip", fake_response, "2026-11-10T06:00:00+00:00")
+    with pytest.raises(zipfile.BadZipFile):
+        run_tx_collector(
+            tmp_path, b"not a zip", fake_response, "2026-11-10T06:00:00+00:00"
+        )
 
     (record,) = read_download_records(tmp_path)
     assert record["sha256"] == sha256(b"not a zip")
@@ -426,7 +436,7 @@ def test_pennsylvania_logs_a_download_whose_zip_is_bad(tmp_path, fake_response):
 
     with (
         mock.patch.object(pennsylvania.requests, "get", side_effect=fake_get),
-        pytest.raises(zipfile.BadZipFile),
+        pytest.raises(DownloadError, match="2024: .*not a zip"),
     ):
         pennsylvania.download_PA_data(2024, 2024, output_directory=tmp_path)
 
@@ -465,3 +475,160 @@ def test_minnesota_finance_files_are_logged(tmp_path, fake_response):
     assert record["url"].endswith("/files/contribs.csv")
     assert record["path"] == "contributions_all.csv"
     assert record["sha256"] == sha256(body)
+
+
+def test_texas_fails_when_the_server_does_not_return_the_zip(tmp_path, fake_response):
+    """A non-200 answer raises instead of printing, so cft collect exits non-zero
+
+    Args:
+        tmp_path: Temporary directory for this test (pytest fixture).
+        fake_response: Builds a requests.Response (fixture).
+    """
+    response = fake_response(status_code=503, reason="Service Unavailable", url=TX_URL)
+    with (
+        mock.patch.object(texas.requests, "get", return_value=response),
+        pytest.raises(DownloadError, match="503 Service Unavailable"),
+    ):
+        texas.download_TX_data(output_directory=tmp_path)
+    assert read_download_records(tmp_path) == []
+
+
+def test_minnesota_html_page_is_rejected_and_the_old_file_kept(tmp_path, fake_response):
+    """An HTML body sent with status 200 fails and doesn't replace the CSV
+
+    The board's server has answered a bad download id this way.
+
+    Args:
+        tmp_path: Temporary directory for this test (pytest fixture).
+        fake_response: Builds a requests.Response (fixture).
+    """
+    previous = b"Recipient reg num,Amount\n1234,250\n"
+    (tmp_path / "contributions_all.csv").write_bytes(previous)
+    page = b"<!DOCTYPE html>\n<html><body>Invalid download id</body></html>"
+
+    def fake_get(url, **kwargs):
+        if url.endswith("contribs.csv"):
+            return fake_response(
+                content=page,
+                url=url,
+                headers={"Content-Type": "application/octet-stream"},
+            )
+        return fake_response(content=MN_FINANCE_PAGE, url=url)
+
+    with (
+        mock.patch.object(mn_finance.requests, "get", side_effect=fake_get),
+        pytest.raises(DownloadError, match="contributions_all.csv.*<!DOCTYPE"),
+    ):
+        mn_finance.download_MN_data(output_directory=tmp_path)
+
+    assert (tmp_path / "contributions_all.csv").read_bytes() == previous
+    assert not list(tmp_path.rglob("*.part"))
+    assert read_download_records(tmp_path) == []
+
+
+def test_minnesota_one_failed_file_does_not_stop_the_others(tmp_path, fake_response):
+    """Every dataset is tried; the error names the one that failed
+
+    Args:
+        tmp_path: Temporary directory for this test (pytest fixture).
+        fake_response: Builds a requests.Response (fixture).
+    """
+    page = b"""
+<html><body>
+<h1>Itemized contributions received of over $200</h1>
+<table><tr><td>All</td><td>x</td><td><a href="/files/contribs.csv">CSV</a></td></tr></table>
+<h1>Itemized general expenditures</h1>
+<table><tr><td>All</td><td>x</td><td><a href="/files/exp.csv">CSV</a></td></tr></table>
+</body></html>
+"""
+    body = b"Committee reg num,Amount\n1,2\n"
+
+    def fake_get(url, **kwargs):
+        if url.endswith("contribs.csv"):
+            raise requests.Timeout("timed out")
+        if url.endswith("exp.csv"):
+            return fake_response(content=body, url=url)
+        return fake_response(content=page, url=url)
+
+    with (
+        mock.patch.object(mn_finance.requests, "get", side_effect=fake_get),
+        pytest.raises(DownloadError, match="contributions_all.csv: timed out") as error,
+    ):
+        mn_finance.download_MN_data(output_directory=tmp_path)
+
+    assert "1 Minnesota file" in str(error.value)
+
+    assert (tmp_path / "expenditures_all.csv").read_bytes() == body
+    (record,) = read_download_records(tmp_path)
+    assert record["path"] == "expenditures_all.csv"
+
+
+def test_pennsylvania_one_failed_year_does_not_stop_the_others(tmp_path, fake_response):
+    """A timeout for one year still downloads the others, then fails naming it
+
+    Args:
+        tmp_path: Temporary directory for this test (pytest fixture).
+        fake_response: Builds a requests.Response (fixture).
+    """
+    zip_bytes = make_zip({"contrib_2024.txt": b"a,b\n1,2\n"})
+
+    def fake_get(url, **kwargs):
+        if "2023.zip" in url:
+            raise requests.Timeout("timed out")
+        return fake_response(content=zip_bytes, url=url)
+
+    with (
+        mock.patch.object(pennsylvania.requests, "get", side_effect=fake_get),
+        pytest.raises(DownloadError, match="2023: timed out") as error,
+    ):
+        pennsylvania.download_PA_data(2023, 2024, output_directory=tmp_path)
+
+    assert "1 year" in str(error.value)
+    assert "2024" not in str(error.value)
+    assert (tmp_path / "2024" / "contrib_2024.txt").read_bytes() == b"a,b\n1,2\n"
+    (record,) = read_download_records(tmp_path)
+    assert record["url"].endswith("/2024.zip")
+
+
+def test_pennsylvania_skips_a_year_with_no_file(tmp_path, fake_response):
+    """A 404 (the current year before it is published) is not a failure
+
+    Args:
+        tmp_path: Temporary directory for this test (pytest fixture).
+        fake_response: Builds a requests.Response (fixture).
+    """
+    zip_bytes = make_zip({"contrib_2024.txt": b"a,b\n1,2\n"})
+
+    def fake_get(url, **kwargs):
+        if "2025.zip" in url:
+            return fake_response(status_code=404, reason="Not Found", url=url)
+        return fake_response(content=zip_bytes, url=url)
+
+    with mock.patch.object(pennsylvania.requests, "get", side_effect=fake_get):
+        pennsylvania.download_PA_data(2024, 2025, output_directory=tmp_path)
+
+    assert (tmp_path / "2024" / "contrib_2024.txt").exists()
+    assert not (tmp_path / "2025").exists()
+
+
+def test_save_response_check_rejects_the_body_before_it_replaces_the_file(
+    tmp_path, fake_response
+):
+    """A failed check deletes the temporary file and keeps the earlier one
+
+    Args:
+        tmp_path: Temporary directory for this test (pytest fixture).
+        fake_response: Builds a requests.Response (fixture).
+    """
+    path = tmp_path / "file.csv"
+    path.write_bytes(b"earlier download")
+
+    def reject(partial: Path) -> None:
+        assert partial.read_bytes() == b"<html>"
+        raise DownloadError("not a CSV")
+
+    with pytest.raises(DownloadError, match="not a CSV"):
+        save_response(fake_response(content=b"<html>"), path, tmp_path, check=reject)
+
+    assert path.read_bytes() == b"earlier download"
+    assert not list(tmp_path.rglob("*.part"))

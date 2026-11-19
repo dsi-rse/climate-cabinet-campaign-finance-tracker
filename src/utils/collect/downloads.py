@@ -9,6 +9,11 @@ directory, with the URL, retrieval time, the server's ETag and Last-Modified,
 the size and sha256 of the file, and the files extracted from it.
 
 Neither name matches any state's path_pattern, so standardize ignores them.
+
+A collector raises DownloadError when it could not get what it was asked for,
+so `cft collect` exits non-zero and the run manifest records the failure.
+Collectors that fetch several files (one per year) finish the others first
+and then raise once, naming each file that failed.
 """
 
 from __future__ import annotations
@@ -16,6 +21,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import unquote, urlparse
@@ -33,6 +39,7 @@ from utils.provenance import (
 __all__ = [
     "ARCHIVE_DIRECTORY",
     "DOWNLOAD_MANIFEST_NAME",
+    "DownloadError",
     "add_extracted_files",
     "append_download_record",
     "archive_path",
@@ -43,6 +50,10 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 _CHUNK_BYTES = 1024 * 1024
+
+
+class DownloadError(RuntimeError):
+    """A collector could not download, check or extract what it was asked for"""
 
 
 def archive_path(directory: Path, url: str, retrieved_at: str) -> Path:
@@ -77,13 +88,15 @@ def save_response(
     path: Path,
     record_relative_to: Path,
     retrieved_at: str | None = None,
+    check: Callable[[Path], None] | None = None,
 ) -> dict:
     """Stream a response body to a file and describe the download
 
     The body is written to a temporary file next to path and renamed when
     complete, so an interrupted download never leaves a partial file at path
-    or replaces an earlier file there. If the download fails, the temporary
-    file is deleted and the error is raised again.
+    or replaces an earlier file there. If the download fails, or check
+    rejects the body, the temporary file is deleted and the error is raised
+    again, and an earlier file at path is left as it was.
 
     Args:
         response: Response from requests, ideally made with stream=True so the
@@ -92,6 +105,10 @@ def save_response(
         record_relative_to: Directory the record's paths are written relative
             to (the directory holding the download manifest).
         retrieved_at: When the request was made. Defaults to now.
+        check: Called with the complete temporary file before it replaces
+            path. It should raise (for example DownloadError) if the body is
+            not what was expected, such as an HTML error page sent with
+            status 200.
 
     Returns:
         A download record: url (as requested), final_url (after redirects),
@@ -111,6 +128,8 @@ def save_response(
                 file.write(chunk)
                 digest.update(chunk)
                 size += len(chunk)
+        if check is not None:
+            check(partial_path)
         partial_path.replace(path)
     except BaseException:
         partial_path.unlink(missing_ok=True)

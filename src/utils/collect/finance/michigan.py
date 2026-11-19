@@ -36,6 +36,7 @@ from bs4 import BeautifulSoup
 from tqdm import tqdm
 
 from utils.collect.downloads import (
+    DownloadError,
     add_extracted_files,
     append_download_record,
     archive_path,
@@ -61,6 +62,12 @@ def download_MI_data(
         directory for each year's files. Each year's 7z archive is kept in
         output_directory/_archives with its retrieval time in the name, and each
         download is logged in output_directory/_downloads.jsonl.
+
+    Raises:
+        DownloadError: if the page listing the archives can't be read, or
+            after every year has been tried, if any year's archive could not
+            be downloaded or extracted. The error names each year.
+        requests.RequestException: if fetching the page fails.
     """
     if output_directory is None:
         output_directory = DATA_DIR / "raw" / "mi"
@@ -97,115 +104,115 @@ def download_MI_data(
         "Sec-GPC": "1",
     }
 
-    try:
-        # Get the page containing legacy data links
-        response = requests.get(
-            search_url, cookies=cookies, headers=headers, timeout=30
-        )
-        if response.status_code != HTTPStatus.OK:
-            print(f"Failed to retrieve page: {response.status_code} {response.reason}")
-            return
-
-        # Parse HTML to find legacy data links
-        soup = BeautifulSoup(response.text, "html.parser")
-        legacy_links = []
-
-        # Find all links that contain 'Legacy-Data' and end with '.7z'
-        for link in soup.find_all("a", href=True):
-            href = link["href"]
-            if "Legacy-Data" in href and ".7z" in href:
-                # Extract year from filename using regex
-                year_match = re.search(r"(\d{4})_mi_cfr\.7z", href)
-                if year_match:
-                    year = year_match.group(1)
-                    full_url = urljoin(base_url, href)
-                    legacy_links.append((year, full_url))
-
-        if not legacy_links:
-            print("No legacy data links found on the page")
-            return
-        if start_year is None:
-            start_year = min(int(year) for year, _ in legacy_links)
-        if end_year is None:
-            end_year = max(int(year) for year, _ in legacy_links)
-        legacy_links = [
-            (year, url)
-            for year, url in legacy_links
-            if int(year) >= start_year and int(year) <= end_year
-        ]
-
-        print(
-            f"Found {len(legacy_links)} legacy data files in the range of {start_year} to {end_year}"
+    # Get the page containing legacy data links
+    response = requests.get(search_url, cookies=cookies, headers=headers, timeout=30)
+    if response.status_code != HTTPStatus.OK:
+        raise DownloadError(
+            f"The Michigan legacy data page {search_url} returned"
+            f" {response.status_code} {response.reason}"
         )
 
-        # Download and extract each file
-        for year, url in tqdm(
-            sorted(legacy_links),
-            desc="Downloading Michigan legacy finance data",
-            total=len(legacy_links),
-        ):
-            print(f"Processing Michigan data for {year}...")
+    # Parse HTML to find legacy data links
+    soup = BeautifulSoup(response.text, "html.parser")
+    legacy_links = []
 
-            # Stream the 7z file to disk; it is kept as the original download
-            retrieved_at = utc_now()
-            try:
-                with requests.get(
-                    url, timeout=60, headers=headers, stream=True
-                ) as file_response:
-                    if file_response.status_code != HTTPStatus.OK:
-                        print(
-                            f"Michigan data from {year} returned "
-                            f"{file_response.reason}"
-                        )
-                        continue
-                    seven_zip_path = archive_path(state_directory, url, retrieved_at)
-                    record = save_response(
-                        file_response,
-                        seven_zip_path,
-                        state_directory,
-                        retrieved_at=retrieved_at,
+    # Find all links that contain 'Legacy-Data' and end with '.7z'
+    for link in soup.find_all("a", href=True):
+        href = link["href"]
+        if "Legacy-Data" in href and ".7z" in href:
+            # Extract year from filename using regex
+            year_match = re.search(r"(\d{4})_mi_cfr\.7z", href)
+            if year_match:
+                year = year_match.group(1)
+                full_url = urljoin(base_url, href)
+                legacy_links.append((year, full_url))
+
+    if not legacy_links:
+        raise DownloadError(f"No legacy data links found on {search_url}")
+    if start_year is None:
+        start_year = min(int(year) for year, _ in legacy_links)
+    if end_year is None:
+        end_year = max(int(year) for year, _ in legacy_links)
+    legacy_links = [
+        (year, url)
+        for year, url in legacy_links
+        if int(year) >= start_year and int(year) <= end_year
+    ]
+
+    print(
+        f"Found {len(legacy_links)} legacy data files in the range of {start_year} to {end_year}"
+    )
+
+    # Download and extract each file. A year that fails doesn't stop the
+    # others; the failures are raised together at the end.
+    failures = []
+    for year, url in tqdm(
+        sorted(legacy_links),
+        desc="Downloading Michigan legacy finance data",
+        total=len(legacy_links),
+    ):
+        print(f"Processing Michigan data for {year}...")
+
+        # Stream the 7z file to disk; it is kept as the original download
+        retrieved_at = utc_now()
+        try:
+            with requests.get(
+                url, timeout=60, headers=headers, stream=True
+            ) as file_response:
+                if file_response.status_code != HTTPStatus.OK:
+                    raise DownloadError(
+                        f"{url} returned {file_response.status_code}"
+                        f" {file_response.reason}"
                     )
-            except requests.RequestException as e:
-                print(f"Network error downloading Michigan data for {year}: {e}")
-                continue
-
-            # Create year directory
-            year_directory = output_directory / year
-            year_directory.mkdir(exist_ok=True, parents=True)
-
-            extracted_paths = []
-            try:
-                with py7zr.SevenZipFile(seven_zip_path, mode="r") as archive:
-                    archive.extractall(path=year_directory)
-                # list what was written, not the archive's stored names: a
-                # stored name can be absolute or hold "..", and py7zr cleans
-                # it when it extracts
-                extracted_paths = [
-                    path for path in year_directory.rglob("*") if path.is_file()
-                ]
-
-                print(f"Successfully extracted Michigan data for {year}")
-
-            except PermissionError as e:
-                print(
-                    f"Permission error while extracting Michigan data for {year}: {e}"
+                seven_zip_path = archive_path(state_directory, url, retrieved_at)
+                record = save_response(
+                    file_response,
+                    seven_zip_path,
+                    state_directory,
+                    retrieved_at=retrieved_at,
                 )
-                # this is likely harmless, failure to set mtime on mounts
-                continue
-            except py7zr.Bad7zFile as e:
-                print(f"Invalid 7z archive for Michigan data from {year}: {e}")
-                continue
-            finally:
-                # log the download even if extraction fails, since the 7z is kept
-                add_extracted_files(record, extracted_paths, state_directory)
-                append_download_record(state_directory, record)
+        except (requests.RequestException, DownloadError) as error:
+            print(f"Could not download Michigan data for {year}: {error}")
+            failures.append(f"{year}: {error}")
+            continue
 
-        print(f"Michigan data download completed. Files saved to {output_directory}")
+        # Create year directory
+        year_directory = output_directory / year
+        year_directory.mkdir(exist_ok=True, parents=True)
 
-    except requests.RequestException as e:
-        print(f"Network error occurred: {e}")
-    except Exception as e:
-        print(f"Unexpected error occurred: {e}")
+        extracted_paths = []
+        try:
+            with py7zr.SevenZipFile(seven_zip_path, mode="r") as archive:
+                archive.extractall(path=year_directory)
+            # list what was written, not the archive's stored names: a
+            # stored name can be absolute or hold "..", and py7zr cleans
+            # it when it extracts
+            extracted_paths = [
+                path for path in year_directory.rglob("*") if path.is_file()
+            ]
+
+            print(f"Successfully extracted Michigan data for {year}")
+
+        except PermissionError as e:
+            # likely harmless: failure to set file times on some mounts
+            print(f"Permission error while extracting Michigan data for {year}: {e}")
+            extracted_paths = [
+                path for path in year_directory.rglob("*") if path.is_file()
+            ]
+        except py7zr.Bad7zFile as e:
+            print(f"Invalid 7z archive for Michigan data from {year}: {e}")
+            failures.append(f"{year}: invalid 7z archive {seven_zip_path.name}: {e}")
+        finally:
+            # log the download even if extraction fails, since the 7z is kept
+            add_extracted_files(record, extracted_paths, state_directory)
+            append_download_record(state_directory, record)
+
+    if failures:
+        raise DownloadError(
+            f"Michigan data for {len(failures)} year(s) could not be collected:\n"
+            + "\n".join(failures)
+        )
+    print(f"Michigan data download completed. Files saved to {output_directory}")
 
 
 if __name__ == "__main__":

@@ -109,3 +109,33 @@ def test_states_come_from_state_folders_only(tmp_path):
     calls = []
     route_pipeline_step(parse(["classify", "--data-directory", str(tmp_path)], calls))
     assert sorted(job.state for job in calls) == ["pa", "tx"]
+
+
+def test_a_failing_state_does_not_stop_the_others(tmp_path):
+    """Every state runs; then one error names the states that failed"""
+
+    def step(args):
+        if args.state in ("pa", "mi"):
+            raise ValueError(f"{args.state} broke")
+        (tmp_path / f"{args.state}.ran").touch()
+
+    args = build_complete_parser().parse_args(
+        ["collect", "--data-directory", str(tmp_path), "--states", "pa", "az", "mi"]
+    )
+    args.pipeline_step_func = step
+    with pytest.raises(RuntimeError, match="collect failed for pa, mi") as error:
+        route_pipeline_step(args)
+    assert (tmp_path / "az.ran").exists()
+    assert isinstance(error.value.__cause__, ValueError)
+
+
+def test_a_single_state_error_is_raised_as_is(tmp_path):
+    def step(args):
+        raise ValueError("pa broke")
+
+    args = build_complete_parser().parse_args(
+        ["collect", "--data-directory", str(tmp_path), "--states", "pa"]
+    )
+    args.pipeline_step_func = step
+    with pytest.raises(ValueError, match="pa broke"):
+        route_pipeline_step(args)

@@ -23,6 +23,7 @@ from pathlib import Path
 import requests
 
 from utils.collect.downloads import (
+    DownloadError,
     add_extracted_files,
     append_download_record,
     archive_path,
@@ -44,6 +45,12 @@ def download_TX_data(output_directory: Path = None) -> None:
         to output_directory. The zip is kept in output_directory/_archives with
         its retrieval time in the name (the commission rebuilds it daily), and
         the download is logged in output_directory/_downloads.jsonl.
+
+    Raises:
+        DownloadError: if the server does not return the zip.
+        requests.RequestException: if the request fails.
+        zipfile.BadZipFile: if the download is not a zip. It is still kept and
+            logged, with no extracted files.
     """
     if output_directory is None:
         output_directory = DATA_DIR / "raw" / "tx"
@@ -64,65 +71,55 @@ def download_TX_data(output_directory: Path = None) -> None:
         "Sec-GPC": "1",
     }
 
-    try:
-        print("Downloading Texas campaign finance CSV database...")
+    print("Downloading Texas campaign finance CSV database...")
 
-        # Stream the ZIP file to disk; it is kept as the original download
-        retrieved_at = utc_now()
-        with requests.get(
-            zip_url, headers=headers, timeout=120, stream=True
-        ) as response:
-            if response.status_code != HTTPStatus.OK:
-                print(
-                    f"Failed to download data: {response.status_code} {response.reason}"
-                )
-                return
-            zip_path = archive_path(output_directory, zip_url, retrieved_at)
-            record = save_response(
-                response, zip_path, output_directory, retrieved_at=retrieved_at
+    # Stream the ZIP file to disk; it is kept as the original download
+    retrieved_at = utc_now()
+    with requests.get(zip_url, headers=headers, timeout=120, stream=True) as response:
+        if response.status_code != HTTPStatus.OK:
+            raise DownloadError(
+                f"Texas data at {zip_url} returned {response.status_code}"
+                f" {response.reason}"
             )
+        zip_path = archive_path(output_directory, zip_url, retrieved_at)
+        record = save_response(
+            response, zip_path, output_directory, retrieved_at=retrieved_at
+        )
 
-        print(f"Successfully downloaded ZIP file ({record['size']:,} bytes)")
-        print(f"Kept the original at {zip_path}")
-        print("Extracting CSV files...")
+    print(f"Successfully downloaded ZIP file ({record['size']:,} bytes)")
+    print(f"Kept the original at {zip_path}")
+    print("Extracting CSV files...")
 
-        extracted_paths = []
-        try:
-            with zipfile.ZipFile(zip_path, "r") as zip_file:
-                # Get list of files in the ZIP
-                file_list = zip_file.namelist()
-                print(f"Found {len(file_list)} files in archive:")
+    extracted_paths = []
+    try:
+        with zipfile.ZipFile(zip_path, "r") as zip_file:
+            # Get list of files in the ZIP
+            file_list = zip_file.namelist()
+            print(f"Found {len(file_list)} files in archive:")
 
-                for filename in file_list:
-                    if filename.endswith("/"):  # Skip directories
-                        continue
+            for filename in file_list:
+                if filename.endswith("/"):  # Skip directories
+                    continue
 
-                    print(f"  Extracting: {filename}")
-                    # extract returns where it wrote the file. A stored name
-                    # that is absolute or holds ".." is cleaned first, so it
-                    # is not the same as output_directory / filename
-                    extracted_paths.append(
-                        Path(zip_file.extract(filename, output_directory))
-                    )
-        finally:
-            # log the download even if extraction fails, since the zip is kept
-            add_extracted_files(record, extracted_paths, output_directory)
-            append_download_record(output_directory, record)
+                print(f"  Extracting: {filename}")
+                # extract returns where it wrote the file. A stored name
+                # that is absolute or holds ".." is cleaned first, so it
+                # is not the same as output_directory / filename
+                extracted_paths.append(
+                    Path(zip_file.extract(filename, output_directory))
+                )
+    finally:
+        # log the download even if extraction fails, since the zip is kept
+        add_extracted_files(record, extracted_paths, output_directory)
+        append_download_record(output_directory, record)
 
-        print("Texas data download completed successfully!")
-        print(f"Extracted {len(extracted_paths)} files to {output_directory}")
-        print("\nExtracted files:")
-        for file_path in extracted_paths:
-            if file_path.exists():
-                file_size = file_path.stat().st_size
-                print(f"  - {file_path.name} ({file_size:,} bytes)")
-
-    except requests.RequestException as e:
-        print(f"Network error occurred while downloading: {e}")
-    except zipfile.BadZipFile as e:
-        print(f"Error extracting ZIP file: {e}")
-    except Exception as e:
-        print(f"Unexpected error occurred: {e}")
+    print("Texas data download completed successfully!")
+    print(f"Extracted {len(extracted_paths)} files to {output_directory}")
+    print("\nExtracted files:")
+    for file_path in extracted_paths:
+        if file_path.exists():
+            file_size = file_path.stat().st_size
+            print(f"  - {file_path.name} ({file_size:,} bytes)")
 
 
 if __name__ == "__main__":

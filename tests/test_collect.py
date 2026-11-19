@@ -9,6 +9,7 @@ import pytest
 import requests
 import utils.collect.finance
 from utils.cli.core import build_complete_parser
+from utils.collect.downloads import DownloadError
 from utils.collect.finance import michigan
 from utils.collect.finance.arizona import (
     CATEGORY_TYPES,
@@ -224,8 +225,13 @@ def test_michigan_failure_skips_only_that_year(
             return fake_response(content=make_7z("2002.txt", "data"), url=url)
         return fake_response(content=MICHIGAN_PAGE.encode())
 
-    with mock.patch.object(michigan.requests, "get", side_effect=fake_get):
+    with (
+        mock.patch.object(michigan.requests, "get", side_effect=fake_get),
+        pytest.raises(DownloadError, match="2001") as error,
+    ):
         michigan.download_MI_data(output_directory=tmp_path)
 
+    # the other year was still collected, and the error names only the bad one
     extracted = tmp_path.resolve() / "LegacyDownloads" / "2002" / "2002.txt"
     assert extracted.read_text() == "data"
+    assert "2002" not in str(error.value).replace("2002_mi_cfr", "")
