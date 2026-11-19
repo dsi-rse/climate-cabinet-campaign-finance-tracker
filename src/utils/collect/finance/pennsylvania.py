@@ -20,6 +20,7 @@ Data notes:
 
 import datetime
 import zipfile
+import zlib
 from http import HTTPStatus
 from pathlib import Path
 
@@ -39,6 +40,18 @@ from utils.constants import DATA_DIR
 from utils.provenance import utc_now
 
 EARLIEST_YEAR = 2000
+# What can go wrong with one year's download or extraction without meaning
+# the other years will fail too. zipfile raises zlib.error for corrupt
+# compressed bytes and BadZipFile only for a truncated or non-zip body;
+# requests' errors are OSErrors.
+_YEAR_ERRORS = (
+    DownloadError,
+    zipfile.BadZipFile,
+    zlib.error,
+    EOFError,
+    OSError,
+    NotImplementedError,
+)
 
 
 @register_special_state_collector("pa")
@@ -85,7 +98,7 @@ def download_PA_data(
         link = f"{pa_url}{year}.zip"
         try:
             _download_year(link, year, output_directory)
-        except (requests.RequestException, zipfile.BadZipFile, DownloadError) as error:
+        except _YEAR_ERRORS as error:
             print(f"Could not collect Pennsylvania data for {year}: {error}")
             failures.append(f"{year}: {error}")
     if failures:
@@ -106,8 +119,9 @@ def _download_year(link: str, year: int, output_directory: Path) -> None:
     Raises:
         DownloadError: if the server returns an error other than 404.
         requests.RequestException: if the request fails.
-        zipfile.BadZipFile: if the download is not a zip. It is still kept
-            and logged, with no extracted files.
+        zipfile.BadZipFile, zlib.error: if the download is not a zip or its
+            contents are corrupt. It is still kept and logged, with no
+            extracted files.
     """
     retrieved_at = utc_now()
     with requests.get(link, timeout=10, stream=True) as response:

@@ -4,6 +4,7 @@ import contextlib
 import hashlib
 import io
 import zipfile
+import zlib
 from pathlib import Path
 from unittest import mock
 
@@ -526,12 +527,16 @@ def test_minnesota_html_page_is_rejected_and_the_old_file_kept(tmp_path, fake_re
     assert read_download_records(tmp_path) == []
 
 
-def test_minnesota_one_failed_file_does_not_stop_the_others(tmp_path, fake_response):
+@pytest.mark.parametrize("failure", ["timeout", "server-error"])
+def test_minnesota_one_failed_file_does_not_stop_the_others(
+    tmp_path, fake_response, failure
+):
     """Every dataset is tried; the error names the one that failed
 
     Args:
         tmp_path: Temporary directory for this test (pytest fixture).
         fake_response: Builds a requests.Response (fixture).
+        failure: How the first file fails: a timeout or a 503.
     """
     page = b"""
 <html><body>
@@ -545,14 +550,19 @@ def test_minnesota_one_failed_file_does_not_stop_the_others(tmp_path, fake_respo
 
     def fake_get(url, **kwargs):
         if url.endswith("contribs.csv"):
-            raise requests.Timeout("timed out")
+            if failure == "timeout":
+                raise requests.Timeout("timed out")
+            return fake_response(status_code=503, reason="Service Unavailable", url=url)
         if url.endswith("exp.csv"):
             return fake_response(content=body, url=url)
         return fake_response(content=page, url=url)
 
+    message = "timed out" if failure == "timeout" else "503 Service Unavailable"
     with (
         mock.patch.object(mn_finance.requests, "get", side_effect=fake_get),
-        pytest.raises(DownloadError, match="contributions_all.csv: timed out") as error,
+        pytest.raises(
+            DownloadError, match=f"contributions_all.csv: .*{message}"
+        ) as error,
     ):
         mn_finance.download_MN_data(output_directory=tmp_path)
 
@@ -563,31 +573,63 @@ def test_minnesota_one_failed_file_does_not_stop_the_others(tmp_path, fake_respo
     assert record["path"] == "expenditures_all.csv"
 
 
-def test_pennsylvania_one_failed_year_does_not_stop_the_others(tmp_path, fake_response):
-    """A timeout for one year still downloads the others, then fails naming it
+@pytest.mark.parametrize(
+    ("failure", "message"),
+    [
+        ("timeout", "timed out"),
+        ("server-error", "503 Service Unavailable"),
+        ("corrupt-zip", "invalid distance too far back"),
+    ],
+)
+def test_pennsylvania_one_failed_year_does_not_stop_the_others(
+    tmp_path, fake_response, failure, message
+):
+    """A failure for one year still downloads the others, then fails naming it
 
     Args:
         tmp_path: Temporary directory for this test (pytest fixture).
         fake_response: Builds a requests.Response (fixture).
+        failure: How 2023 fails: a timeout, a 503, or corrupt compressed
+            bytes (zipfile raises zlib.error for those, not BadZipFile).
+        message: Text the error for 2023 must contain.
     """
     zip_bytes = make_zip({"contrib_2024.txt": b"a,b\n1,2\n"})
 
     def fake_get(url, **kwargs):
-        if "2023.zip" in url:
+        if "2023.zip" in url and failure == "timeout":
             raise requests.Timeout("timed out")
+        if "2023.zip" in url and failure == "server-error":
+            return fake_response(status_code=503, reason="Service Unavailable", url=url)
         return fake_response(content=zip_bytes, url=url)
+
+    real_extractall = zipfile.ZipFile.extractall
+
+    def extractall(self, path=None, *args, **kwargs):
+        if failure == "corrupt-zip" and "2023" in str(path):
+            raise zlib.error(
+                "Error -3 while decompressing data: invalid distance too far back"
+            )
+        return real_extractall(self, path, *args, **kwargs)
 
     with (
         mock.patch.object(pennsylvania.requests, "get", side_effect=fake_get),
-        pytest.raises(DownloadError, match="2023: timed out") as error,
+        mock.patch.object(zipfile.ZipFile, "extractall", extractall),
+        pytest.raises(DownloadError, match=f"2023: .*{message}") as error,
     ):
         pennsylvania.download_PA_data(2023, 2024, output_directory=tmp_path)
 
     assert "1 year" in str(error.value)
     assert "2024" not in str(error.value)
     assert (tmp_path / "2024" / "contrib_2024.txt").read_bytes() == b"a,b\n1,2\n"
-    (record,) = read_download_records(tmp_path)
-    assert record["url"].endswith("/2024.zip")
+    records = read_download_records(tmp_path)
+    assert records[-1]["url"].endswith("/2024.zip")
+    if failure == "corrupt-zip":
+        # the corrupt zip was downloaded, so it is kept and logged, empty
+        assert records[0]["url"].endswith("/2023.zip")
+        assert records[0]["extracted"] == []
+        assert not (tmp_path / "2023").exists()
+    else:
+        assert len(records) == 1
 
 
 def test_pennsylvania_skips_a_year_with_no_file(tmp_path, fake_response):
@@ -727,3 +769,49 @@ def test_michigan_year_folder_holds_only_the_new_download(tmp_path, fake_respons
     year_directory = tmp_path.resolve() / "LegacyDownloads" / "2001"
     assert sorted(path.name for path in year_directory.iterdir()) == ["a.csv"]
     assert (year_directory / "a.csv").read_bytes() == b"3"
+
+
+def test_archive_members_named_like_the_log_or_archives_are_not_written(
+    tmp_path, fake_response, caplog
+):
+    """A zip can't replace the download log that decides what gets removed"""
+    good = make_zip({"contribs_01.csv": b"a\n"})
+    run_tx_collector(tmp_path, good, fake_response, "2026-11-09T06:00:00+00:00")
+    log_before = (tmp_path / DOWNLOAD_MANIFEST_NAME).read_bytes()
+    archives_before = sorted(
+        path.name for path in (tmp_path / ARCHIVE_DIRECTORY).iterdir()
+    )
+
+    hostile = make_zip(
+        {
+            DOWNLOAD_MANIFEST_NAME: b'{"extracted": [{"path": "_archives/x"}]}\n',
+            f"{ARCHIVE_DIRECTORY}/planted.zip": b"zip",
+            "contribs_01.csv": b"b\n",
+        }
+    )
+    run_tx_collector(tmp_path, hostile, fake_response, "2026-11-10T06:00:00+00:00")
+
+    records = read_download_records(tmp_path)
+    assert len(records) == 2
+    assert (tmp_path / DOWNLOAD_MANIFEST_NAME).read_bytes().startswith(log_before)
+    assert not (tmp_path / ARCHIVE_DIRECTORY / "planted.zip").exists()
+    assert (
+        len(list((tmp_path / ARCHIVE_DIRECTORY).iterdir())) == len(archives_before) + 1
+    )
+    assert [file["path"] for file in records[-1]["extracted"]] == ["contribs_01.csv"]
+    assert "is skipped" in caplog.text
+
+
+def test_a_damaged_log_line_is_skipped_not_fatal(tmp_path, fake_response, caplog):
+    """A run killed mid-write leaves a partial line; later runs still work"""
+    good = make_zip({"contribs_01.csv": b"a\n"})
+    run_tx_collector(tmp_path, good, fake_response, "2026-11-09T06:00:00+00:00")
+    with (tmp_path / DOWNLOAD_MANIFEST_NAME).open("a") as log:
+        log.write('{"url": "https://x", "extracted": [{"pa')
+
+    records = read_download_records(tmp_path)
+    assert len(records) == 1
+    assert "line 2 is not valid JSON" in caplog.text
+
+    run_tx_collector(tmp_path, good, fake_response, "2026-11-10T06:00:00+00:00")
+    assert (tmp_path / "contribs_01.csv").read_bytes() == b"a\n"

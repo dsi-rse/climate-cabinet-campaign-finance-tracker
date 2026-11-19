@@ -211,7 +211,10 @@ def replace_extracted_files(
     folder is removed and target is left as it was.
 
     Files in target that no download record lists (such as files extracted
-    before the log existed) are kept.
+    before the log existed) are kept. The log, the archive folder and
+    partial downloads are never written or removed by this: an archive
+    member with one of those names is skipped with a warning, so a bad
+    archive can't rewrite the log that decides what gets removed.
 
     Args:
         target: Folder the archive's files belong in.
@@ -243,19 +246,46 @@ def replace_extracted_files(
                 relative = path.resolve().relative_to(resolved_target)
             except ValueError:
                 continue
-            if relative not in new_relative and path.is_file():
+            if _is_reserved(relative) or relative in new_relative:
+                continue
+            if path.is_file():
                 path.unlink()
-                logger.info("Removed %s: the new download doesn't have it", path)
+                print(f"Removed {path}: the new download doesn't have it")
 
     target.mkdir(parents=True, exist_ok=True)
     final_paths = []
     for path in new_files:
-        destination = target / path.relative_to(staging)
+        relative = path.relative_to(staging)
+        if _is_reserved(relative):
+            logger.warning(
+                "%s in the archive is skipped: that name is kept for the"
+                " download log and archives",
+                relative,
+            )
+            continue
+        destination = target / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         path.replace(destination)
         final_paths.append(destination)
     shutil.rmtree(staging, ignore_errors=True)
     return sorted(final_paths)
+
+
+def _is_reserved(relative: Path) -> bool:
+    """True for the paths collect keeps for itself inside a raw data folder
+
+    Args:
+        relative: Path relative to the folder.
+
+    Returns:
+        True for the download log, anything under the archive folder, and
+        partial downloads.
+    """
+    return (
+        relative.parts[0] == ARCHIVE_DIRECTORY
+        or relative.name == DOWNLOAD_MANIFEST_NAME
+        or relative.name.endswith(PARTIAL_DOWNLOAD_SUFFIX)
+    )
 
 
 def append_download_record(directory: Path, record: dict) -> None:
@@ -282,11 +312,23 @@ def read_download_records(directory: Path) -> list[dict]:
 
     Returns:
         The records, oldest first, or an empty list if there is no manifest.
+        A line that isn't valid JSON (a run killed mid-write) is skipped with
+        a warning rather than failing every later run.
     """
     path = Path(directory) / DOWNLOAD_MANIFEST_NAME
     if not path.exists():
         return []
-    return [json.loads(line) for line in path.read_text().splitlines() if line]
+    records = []
+    for number, line in enumerate(path.read_text().splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            records.append(json.loads(line))
+        except json.JSONDecodeError as error:
+            logger.warning(
+                "%s line %d is not valid JSON and is skipped: %s", path, number, error
+            )
+    return records
 
 
 def _relative_label(path: Path, directory: Path) -> str:

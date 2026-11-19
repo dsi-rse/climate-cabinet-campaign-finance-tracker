@@ -25,6 +25,7 @@ Data notes:
 """
 
 import argparse
+import lzma
 import re
 from functools import partial
 from http import HTTPStatus
@@ -34,6 +35,7 @@ from urllib.parse import urljoin
 import py7zr
 import requests
 from bs4 import BeautifulSoup
+from py7zr.exceptions import ArchiveError
 from tqdm import tqdm
 
 from utils.collect.downloads import (
@@ -57,7 +59,8 @@ def _extract_7z(seven_zip_path: Path, staging: Path) -> None:
         staging: Folder to extract into.
 
     Raises:
-        py7zr.Bad7zFile: if the file is not a 7z archive.
+        ArchiveError: if the file is not a 7z archive or can't be read.
+        lzma.LZMAError: if the compressed bytes are corrupt.
     """
     try:
         with py7zr.SevenZipFile(seven_zip_path, mode="r") as archive:
@@ -208,9 +211,11 @@ def download_MI_data(
                 year_directory, state_directory, partial(_extract_7z, seven_zip_path)
             )
             print(f"Successfully extracted Michigan data for {year}")
-        except py7zr.Bad7zFile as e:
-            print(f"Invalid 7z archive for Michigan data from {year}: {e}")
-            failures.append(f"{year}: invalid 7z archive {seven_zip_path.name}: {e}")
+        except (ArchiveError, lzma.LZMAError, EOFError, OSError) as e:
+            # py7zr raises LZMAError for corrupt bytes and Bad7zFile (an
+            # ArchiveError) only for a truncated or non-7z body
+            print(f"Could not extract Michigan data from {year}: {e}")
+            failures.append(f"{year}: could not extract {seven_zip_path.name}: {e}")
         finally:
             # log the download even if extraction fails, since the 7z is kept
             add_extracted_files(record, extracted_paths, state_directory)

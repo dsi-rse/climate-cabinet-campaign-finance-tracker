@@ -496,6 +496,8 @@ def _run_steps_locally(command: str, job_args_list: list[argparse.Namespace]) ->
     state, its error is raised as is. With several, every state is run and
     then one error names the states that failed, so a scripted multi-state
     run exits non-zero without skipping the states after the first failure.
+    This is the local path only: with --slurm each job fails on its own and
+    the submitting command still exits 0.
 
     Args:
         command: The step being run, for the error message.

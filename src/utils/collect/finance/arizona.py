@@ -82,6 +82,11 @@ TOO_MANY_REQUESTS = 429
 MAX_RATE_LIMIT_RETRIES = 5
 # How many times a page that fails to load is retried before the run fails
 PAGE_RETRIES = 3
+# The server answers some transactor ids with an error or an unexpected body.
+# A few are skipped; if more than this share of a type's ids fail, the run
+# fails and the earlier file is kept, since a rate limit or outage would
+# otherwise leave a nearly empty file that looks complete.
+MAX_SKIPPED_TRANSACTOR_SHARE = 0.05
 # Position values the search accepts. Only independent expenditures differ by
 # position; the other categories return the same rows for any value.
 POSITIONS = ("Support", "Oppose")
@@ -322,14 +327,26 @@ class ArizonaAPI:
             "HighAmount": "",
         }
 
+        response = self._post_with_rate_limit_retries(
+            ADVANCED_SEARCH_URL, params=search_query_params, data=datatables_form
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def _post_with_rate_limit_retries(self, url: str, **kwargs) -> requests.Response:
+        """Post a request, retrying while the server rate-limits it
+
+        Args:
+            url: Endpoint to post to.
+            **kwargs: Passed to the session's post, with the timeout.
+
+        Returns:
+            The last response. It is a 429 if every retry was rate-limited;
+            the caller's raise_for_status turns that into an HTTPError.
+        """
         for attempt in range(self.max_rate_limit_retries + 1):
             time.sleep(self.wait_time)
-            response = self.session.post(
-                ADVANCED_SEARCH_URL,
-                params=search_query_params,
-                data=datatables_form,
-                timeout=self.timeout,
-            )
+            response = self.session.post(url, timeout=self.timeout, **kwargs)
             if response.status_code != TOO_MANY_REQUESTS:
                 break
             if attempt < self.max_rate_limit_retries:
@@ -340,9 +357,7 @@ class ArizonaAPI:
                     f" {attempt + 1} of {self.max_rate_limit_retries}..."
                 )
                 time.sleep(wait)
-
-        response.raise_for_status()
-        return response.json()
+        return response
 
     def fetch_transactor_data(self, transactor_id: str, transactor_type: str) -> dict:
         """Get Arizona Campaign Finance transactor data by transactor ID.
@@ -353,9 +368,14 @@ class ArizonaAPI:
 
         Returns:
             Dictionary containing transactor data
+
+        Raises:
+            requests.HTTPError: if the server answers with an error, including
+                a rate limit that persists after max_rate_limit_retries
+                retries.
+            ValueError: if the body isn't the expected JSON.
         """
-        time.sleep(self.wait_time)
-        response = self.session.post(
+        response = self._post_with_rate_limit_retries(
             TRANSACTOR_DETAILS_URL,
             params={
                 "Page": 11,
@@ -367,7 +387,6 @@ class ArizonaAPI:
                 "Name": f"3~{transactor_id}",
             },
             headers=HEADERS,
-            timeout=self.timeout,
         )
         response.raise_for_status()
 
@@ -752,7 +771,7 @@ class ArizonaDataProcessor:
                 api, query, start_position, page_size
             )
 
-            if "data" not in response_data or not response_data["data"]:
+            if not response_data["data"]:
                 break
 
             records = response_data["data"]
@@ -809,14 +828,17 @@ class ArizonaDataProcessor:
             length: Records per page.
 
         Returns:
-            The page, as the server returned it.
+            The page, as the server returned it. It has a "data" list, which
+            is empty once the results are exhausted.
 
         Raises:
-            DownloadError: if the page still fails after page_retries retries.
+            DownloadError: if the page still fails after page_retries
+                retries, or the server keeps answering with a body that has
+                no "data" (such as an error message sent with status 200).
         """
         for attempt in range(self.page_retries + 1):
             try:
-                return api.fetch_transaction_data_page(
+                page = api.fetch_transaction_data_page(
                     category_type=query["CategoryType"],
                     cycle_id=query["CycleId"],
                     start_date=query["StartDate"],
@@ -826,6 +848,11 @@ class ArizonaDataProcessor:
                     length=length,
                     position=query["Position"],
                 )
+                if not isinstance(page, dict) or not isinstance(page.get("data"), list):
+                    raise ValueError(
+                        f"the response has no data list: {str(page)[:200]}"
+                    )
+                return page
             except (requests.RequestException, ValueError) as error:
                 if attempt == self.page_retries:
                     raise DownloadError(
@@ -852,7 +879,10 @@ class ArizonaDataProcessor:
         type finishes, or in batches along the way with save_in_batches.
         With override_existing_data, they go to a hidden temporary file that
         replaces the earlier file only once the type finishes; a run that
-        fails, or fetches nothing, leaves the earlier file as it was.
+        fails leaves the earlier file as it was. Ids the server rejects are
+        printed and skipped, but if more than MAX_SKIPPED_TRANSACTOR_SHARE
+        of a type's ids are skipped the run fails, since a rate limit or
+        outage would otherwise leave a nearly empty file that looks complete.
 
         Args:
             api: ArizonaAPI instance for making API calls
@@ -861,6 +891,10 @@ class ArizonaDataProcessor:
 
         Returns:
             Dictionary of transactor type to the records fetched
+
+        Raises:
+            DownloadError: if more than MAX_SKIPPED_TRANSACTOR_SHARE of a
+                type's ids could not be fetched.
         """
         all_transactor_data = {}
         total_transactors = sum(len(ids) for ids in transactor_ids_by_type.values())
@@ -885,6 +919,7 @@ class ArizonaDataProcessor:
 
                 retrieved_at = utc_now()
                 results = []
+                skipped = 0
                 transactor_ids_list = list(transactor_ids)
                 try:
                     with tqdm(
@@ -896,16 +931,26 @@ class ArizonaDataProcessor:
                         for i in range(
                             0, len(transactor_ids_list), transactor_batch_size
                         ):
-                            batch_results = self._fetch_transactors(
+                            batch_results, batch_skipped = self._fetch_transactors(
                                 api,
                                 transactor_ids_list[i : i + transactor_batch_size],
                                 transactor_type,
                                 i // transactor_batch_size + 1,
                                 (type_pbar, overall_pbar),
                             )
+                            skipped += batch_skipped
                             if batch_results and self.save_in_batches:
                                 self._save_batch_data(batch_results, write_path)
                             results.extend(batch_results)
+                    if skipped > MAX_SKIPPED_TRANSACTOR_SHARE * len(
+                        transactor_ids_list
+                    ):
+                        raise DownloadError(
+                            f"{skipped} of {len(transactor_ids_list)}"
+                            f" {transactor_type} ids could not be fetched (more"
+                            f" than {MAX_SKIPPED_TRANSACTOR_SHARE:.0%}), so"
+                            f" {output_file.name} was not replaced"
+                        )
                     if not self.save_in_batches:
                         self._save_batch_data(results, write_path)
                 except BaseException:
@@ -914,13 +959,7 @@ class ArizonaDataProcessor:
                     raise
 
                 if self.override_existing_data:
-                    if write_path.exists():
-                        write_path.replace(output_file)
-                    else:
-                        print(
-                            f"No {transactor_type} records were fetched, so"
-                            f" {output_file.name} is left as it was"
-                        )
+                    write_path.replace(output_file)
                 all_transactor_data[transactor_type] = results
                 self._log_query(
                     output_file,
@@ -928,6 +967,7 @@ class ArizonaDataProcessor:
                     {
                         "transactor_type": transactor_type,
                         "requested_ids": len(transactor_ids_list),
+                        "skipped_ids": skipped,
                     },
                     len(results),
                     retrieved_at,
@@ -942,7 +982,7 @@ class ArizonaDataProcessor:
         transactor_type: str,
         batch_number: int,
         progress_bars: tuple[tqdm, ...],
-    ) -> list[dict]:
+    ) -> tuple[list[dict], int]:
         """Fetch one batch of transactors, skipping ones the server rejects
 
         Args:
@@ -953,11 +993,12 @@ class ArizonaDataProcessor:
             progress_bars: Bars to advance by one per transactor
 
         Returns:
-            The records fetched. A transactor the server answers with an
-            error or an unexpected body is printed and left out; a failed
-            request is raised.
+            The records fetched, and how many ids were skipped. A transactor
+            the server answers with an error or an unexpected body is
+            printed and skipped; a failed request is raised.
         """
         batch_results = []
+        skipped = 0
         with tqdm(
             total=len(transactor_ids),
             desc=f"Processing batch {batch_number}",
@@ -971,11 +1012,12 @@ class ArizonaDataProcessor:
                     )
                 except (ValueError, requests.HTTPError) as e:
                     print(f"Error fetching data for {transactor_id}: {e}")
+                    skipped += 1
                 finally:
                     batch_pbar.update(1)
                     for progress_bar in progress_bars:
                         progress_bar.update(1)
-        return batch_results
+        return batch_results, skipped
 
     def get_transactor_ids_from_transactions(self) -> dict[str, set[str]]:
         """Get transactor IDs from existing transaction files."""
