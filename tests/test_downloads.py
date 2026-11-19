@@ -632,3 +632,98 @@ def test_save_response_check_rejects_the_body_before_it_replaces_the_file(
 
     assert path.read_bytes() == b"earlier download"
     assert not list(tmp_path.rglob("*.part"))
+
+
+def test_texas_removes_files_the_previous_download_had_and_the_new_one_lacks(
+    tmp_path, fake_response
+):
+    """A smaller rebuild of the archive leaves no stale numbered files behind
+
+    Files the log doesn't know about (from before the log existed) are kept.
+    """
+    (tmp_path / "manual_notes.csv").write_bytes(b"kept\n")
+    first = make_zip({"contribs_01.csv": b"a\n", "contribs_02.csv": b"b\n"})
+    second = make_zip({"contribs_01.csv": b"new a\n"})
+    run_tx_collector(tmp_path, first, fake_response, "2026-11-09T06:00:00+00:00")
+    run_tx_collector(tmp_path, second, fake_response, "2026-11-10T06:00:00+00:00")
+
+    assert sorted(path.name for path in tmp_path.glob("*.csv")) == [
+        "contribs_01.csv",
+        "manual_notes.csv",
+    ]
+    assert (tmp_path / "contribs_01.csv").read_bytes() == b"new a\n"
+    assert not [path for path in tmp_path.iterdir() if path.name.startswith(".")]
+    assert not [
+        path for path in tmp_path.parent.iterdir() if path.name.endswith(".extracting")
+    ]
+    records = read_download_records(tmp_path)
+    assert [file["path"] for file in records[-1]["extracted"]] == ["contribs_01.csv"]
+
+
+def test_texas_failed_extraction_leaves_the_previous_files(tmp_path, fake_response):
+    """A bad zip is logged but the files from the last good download stay"""
+    good = make_zip({"contribs_01.csv": b"a\n"})
+    run_tx_collector(tmp_path, good, fake_response, "2026-11-09T06:00:00+00:00")
+    with pytest.raises(zipfile.BadZipFile):
+        run_tx_collector(
+            tmp_path, b"not a zip", fake_response, "2026-11-10T06:00:00+00:00"
+        )
+
+    assert (tmp_path / "contribs_01.csv").read_bytes() == b"a\n"
+    assert read_download_records(tmp_path)[-1]["extracted"] == []
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_pennsylvania_year_folder_holds_only_the_new_download(
+    tmp_path, fake_response, nested
+):
+    """Re-downloading a year removes files the new zip doesn't have
+
+    Some years' zips store their files inside a folder named after the year.
+    """
+
+    def year_zip(files):
+        prefix = "2024/" if nested else ""
+        return make_zip({prefix + name: body for name, body in files.items()})
+
+    bodies = iter([year_zip({"a.txt": b"1", "b.txt": b"2"}), year_zip({"a.txt": b"3"})])
+
+    def fake_get(url, **kwargs):
+        return fake_response(content=next(bodies), url=url)
+
+    with mock.patch.object(pennsylvania.requests, "get", side_effect=fake_get):
+        pennsylvania.download_PA_data(2024, 2024, output_directory=tmp_path)
+        pennsylvania.download_PA_data(2024, 2024, output_directory=tmp_path)
+
+    assert sorted(path.name for path in (tmp_path / "2024").iterdir()) == ["a.txt"]
+    assert (tmp_path / "2024" / "a.txt").read_bytes() == b"3"
+    records = read_download_records(tmp_path)
+    assert [file["path"] for file in records[-1]["extracted"]] == ["2024/a.txt"]
+
+
+def test_michigan_year_folder_holds_only_the_new_download(tmp_path, fake_response):
+    page = '<a href="/-/media/Legacy-Data/2001_mi_cfr.7z">2001</a>'
+
+    def seven_zip(files):
+        buffer = io.BytesIO()
+        with py7zr.SevenZipFile(buffer, mode="w") as archive:
+            for name, body in files.items():
+                archive.writestr(body, name)
+        return buffer.getvalue()
+
+    bodies = iter(
+        [seven_zip({"a.csv": b"1", "b.csv": b"2"}), seven_zip({"a.csv": b"3"})]
+    )
+
+    def fake_get(url, **kwargs):
+        if url.endswith(".7z"):
+            return fake_response(content=next(bodies), url=url)
+        return fake_response(content=page.encode())
+
+    with mock.patch.object(michigan.requests, "get", side_effect=fake_get):
+        michigan.download_MI_data(output_directory=tmp_path)
+        michigan.download_MI_data(output_directory=tmp_path)
+
+    year_directory = tmp_path.resolve() / "LegacyDownloads" / "2001"
+    assert sorted(path.name for path in year_directory.iterdir()) == ["a.csv"]
+    assert (year_directory / "a.csv").read_bytes() == b"3"

@@ -26,6 +26,7 @@ Data notes:
 
 import argparse
 import re
+from functools import partial
 from http import HTTPStatus
 from pathlib import Path
 from urllib.parse import urljoin
@@ -40,11 +41,30 @@ from utils.collect.downloads import (
     add_extracted_files,
     append_download_record,
     archive_path,
+    replace_extracted_files,
     save_response,
 )
 from utils.collect.state_collection_registry import register_special_state_collector
 from utils.constants import DATA_DIR
 from utils.provenance import utc_now
+
+
+def _extract_7z(seven_zip_path: Path, staging: Path) -> None:
+    """Extract a 7z archive into a folder
+
+    Args:
+        seven_zip_path: The archive.
+        staging: Folder to extract into.
+
+    Raises:
+        py7zr.Bad7zFile: if the file is not a 7z archive.
+    """
+    try:
+        with py7zr.SevenZipFile(seven_zip_path, mode="r") as archive:
+            archive.extractall(path=staging)
+    except PermissionError as e:
+        # likely harmless: failure to set file times on some mounts
+        print(f"Permission error while extracting Michigan data: {e}")
 
 
 @register_special_state_collector("mi")
@@ -61,7 +81,9 @@ def download_MI_data(
         Saves extracted files from michigan.gov to output_directory with a separate
         directory for each year's files. Each year's 7z archive is kept in
         output_directory/_archives with its retrieval time in the name, and each
-        download is logged in output_directory/_downloads.jsonl.
+        download is logged in output_directory/_downloads.jsonl. Files an
+        earlier download of a year extracted that this one doesn't have are
+        removed (see utils.collect.downloads.replace_extracted_files).
 
     Raises:
         DownloadError: if the page listing the archives can't be read, or
@@ -176,29 +198,16 @@ def download_MI_data(
             failures.append(f"{year}: {error}")
             continue
 
-        # Create year directory
+        # the files replace those of the year's previous download. They are
+        # listed as written, not by the archive's stored names: a stored
+        # name can be absolute or hold "..", and py7zr cleans it
         year_directory = output_directory / year
-        year_directory.mkdir(exist_ok=True, parents=True)
-
         extracted_paths = []
         try:
-            with py7zr.SevenZipFile(seven_zip_path, mode="r") as archive:
-                archive.extractall(path=year_directory)
-            # list what was written, not the archive's stored names: a
-            # stored name can be absolute or hold "..", and py7zr cleans
-            # it when it extracts
-            extracted_paths = [
-                path for path in year_directory.rglob("*") if path.is_file()
-            ]
-
+            extracted_paths = replace_extracted_files(
+                year_directory, state_directory, partial(_extract_7z, seven_zip_path)
+            )
             print(f"Successfully extracted Michigan data for {year}")
-
-        except PermissionError as e:
-            # likely harmless: failure to set file times on some mounts
-            print(f"Permission error while extracting Michigan data for {year}: {e}")
-            extracted_paths = [
-                path for path in year_directory.rglob("*") if path.is_file()
-            ]
         except py7zr.Bad7zFile as e:
             print(f"Invalid 7z archive for Michigan data from {year}: {e}")
             failures.append(f"{year}: invalid 7z archive {seven_zip_path.name}: {e}")

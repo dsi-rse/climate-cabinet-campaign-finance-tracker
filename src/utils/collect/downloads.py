@@ -10,6 +10,13 @@ the size and sha256 of the file, and the files extracted from it.
 
 Neither name matches any state's path_pattern, so standardize ignores them.
 
+Archives are extracted with replace_extracted_files: into a fresh folder
+first, and only when that succeeds do the files move into place, replacing
+files earlier downloads extracted there (those listed in the download log)
+that the new archive doesn't have. Texas splits its data into numbered files,
+so a smaller rebuild used to leave stale numbered files from an older
+download next to the new ones.
+
 A collector raises DownloadError when it could not get what it was asked for,
 so `cft collect` exits non-zero and the run manifest records the failure.
 Collectors that fetch several files (one per year) finish the others first
@@ -21,6 +28,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import shutil
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -44,6 +52,7 @@ __all__ = [
     "append_download_record",
     "archive_path",
     "read_download_records",
+    "replace_extracted_files",
     "save_response",
 ]
 
@@ -187,6 +196,66 @@ def add_extracted_files(
         extracted.append(describe_file(path, relative_to=record_relative_to))
     record["extracted"] = extracted
     return record
+
+
+def replace_extracted_files(
+    target: Path, records_directory: Path, extract: Callable[[Path], None]
+) -> list[Path]:
+    """Extract an archive into a fresh folder, then move its files into target
+
+    extract(staging) writes the archive's files into an empty hidden folder
+    next to target. When it finishes, files that earlier downloads extracted
+    into target (per the download log in records_directory) and this archive
+    doesn't have are removed, then the new files are moved into target,
+    replacing files with the same names. If extract raises, the staging
+    folder is removed and target is left as it was.
+
+    Files in target that no download record lists (such as files extracted
+    before the log existed) are kept.
+
+    Args:
+        target: Folder the archive's files belong in.
+        records_directory: Directory holding the download log.
+        extract: Writes the archive's files into the folder it is given.
+
+    Returns:
+        The extracted files' final paths, sorted.
+    """
+    target = Path(target)
+    records_directory = Path(records_directory)
+    staging = target.parent / f".{target.name}.extracting"
+    if staging.exists():
+        shutil.rmtree(staging)
+    staging.mkdir(parents=True)
+    try:
+        extract(staging)
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    new_files = [path for path in staging.rglob("*") if path.is_file()]
+    new_relative = {path.relative_to(staging) for path in new_files}
+
+    resolved_target = target.resolve()
+    for record in read_download_records(records_directory):
+        for extracted in record.get("extracted", []):
+            path = records_directory / extracted["path"]
+            try:
+                relative = path.resolve().relative_to(resolved_target)
+            except ValueError:
+                continue
+            if relative not in new_relative and path.is_file():
+                path.unlink()
+                logger.info("Removed %s: the new download doesn't have it", path)
+
+    target.mkdir(parents=True, exist_ok=True)
+    final_paths = []
+    for path in new_files:
+        destination = target / path.relative_to(staging)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        path.replace(destination)
+        final_paths.append(destination)
+    shutil.rmtree(staging, ignore_errors=True)
+    return sorted(final_paths)
 
 
 def append_download_record(directory: Path, record: dict) -> None:

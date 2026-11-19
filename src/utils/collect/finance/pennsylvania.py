@@ -31,6 +31,7 @@ from utils.collect.downloads import (
     add_extracted_files,
     append_download_record,
     archive_path,
+    replace_extracted_files,
     save_response,
 )
 from utils.collect.state_collection_registry import register_special_state_collector
@@ -54,7 +55,9 @@ def download_PA_data(
         Saves raw files from dos.pa.gov to output_directory with a separate directory
         for each year's files. Each year's zip is kept in output_directory/_archives
         with its retrieval time in the name, and each download is logged in
-        output_directory/_downloads.jsonl.
+        output_directory/_downloads.jsonl. Files an earlier download of a year
+        extracted that this one doesn't have are removed (see
+        utils.collect.downloads.replace_extracted_files).
 
     Raises:
         DownloadError: after every year has been tried, if any year's zip
@@ -120,19 +123,23 @@ def _download_year(link: str, year: int, output_directory: Path) -> None:
             response, zip_path, output_directory, retrieved_at=retrieved_at
         )
 
+    def extract(staging: Path) -> None:
+        with zipfile.ZipFile(zip_path) as zippedfiles:
+            zippedfiles.extractall(staging)
+        # some years have all contents in a single directory named after
+        # the year; its files belong directly in the year's folder
+        nested = staging / str(year)
+        if nested.is_dir():
+            for path in list(nested.iterdir()):
+                path.rename(staging / path.name)
+            nested.rmdir()
+
     year_directory = output_directory / str(year)
-    year_directory.mkdir(exist_ok=True, parents=True)
     extracted_paths = []
     try:
-        with zipfile.ZipFile(zip_path) as zippedfiles:
-            for zippedfile in zippedfiles.infolist():
-                # some years have all contents in a single directory named
-                # after the year by default
-                if zippedfile.filename.startswith(f"{year}/"):
-                    extracted = zippedfiles.extract(zippedfile, output_directory)
-                else:
-                    extracted = zippedfiles.extract(zippedfile, year_directory)
-                extracted_paths.append(Path(extracted))
+        extracted_paths = replace_extracted_files(
+            year_directory, output_directory, extract
+        )
     finally:
         # log the download even if extraction fails, since the zip is kept
         add_extracted_files(record, extracted_paths, output_directory)

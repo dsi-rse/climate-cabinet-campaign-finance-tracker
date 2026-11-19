@@ -27,6 +27,7 @@ from utils.collect.downloads import (
     add_extracted_files,
     append_download_record,
     archive_path,
+    replace_extracted_files,
     save_response,
 )
 from utils.collect.state_collection_registry import register_special_state_collector
@@ -44,7 +45,9 @@ def download_TX_data(output_directory: Path = None) -> None:
         Downloads and extracts the bulk CSV database from Texas Ethics Commission
         to output_directory. The zip is kept in output_directory/_archives with
         its retrieval time in the name (the commission rebuilds it daily), and
-        the download is logged in output_directory/_downloads.jsonl.
+        the download is logged in output_directory/_downloads.jsonl. Files an
+        earlier download extracted that this one doesn't have are removed
+        (see utils.collect.downloads.replace_extracted_files).
 
     Raises:
         DownloadError: if the server does not return the zip.
@@ -90,8 +93,7 @@ def download_TX_data(output_directory: Path = None) -> None:
     print(f"Kept the original at {zip_path}")
     print("Extracting CSV files...")
 
-    extracted_paths = []
-    try:
+    def extract(staging: Path) -> None:
         with zipfile.ZipFile(zip_path, "r") as zip_file:
             # Get list of files in the ZIP
             file_list = zip_file.namelist()
@@ -100,14 +102,18 @@ def download_TX_data(output_directory: Path = None) -> None:
             for filename in file_list:
                 if filename.endswith("/"):  # Skip directories
                     continue
-
                 print(f"  Extracting: {filename}")
-                # extract returns where it wrote the file. A stored name
-                # that is absolute or holds ".." is cleaned first, so it
-                # is not the same as output_directory / filename
-                extracted_paths.append(
-                    Path(zip_file.extract(filename, output_directory))
-                )
+                # a stored name that is absolute or holds ".." is cleaned
+                # first, so it lands inside the folder
+                zip_file.extract(filename, staging)
+
+    extracted_paths = []
+    try:
+        # the files replace those of the previous download, so a smaller
+        # rebuild of the archive leaves no stale numbered files behind
+        extracted_paths = replace_extracted_files(
+            output_directory, output_directory, extract
+        )
     finally:
         # log the download even if extraction fails, since the zip is kept
         add_extracted_files(record, extracted_paths, output_directory)
