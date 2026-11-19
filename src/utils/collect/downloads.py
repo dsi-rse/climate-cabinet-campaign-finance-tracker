@@ -9,6 +9,18 @@ directory, with the URL, retrieval time, the server's ETag and Last-Modified,
 the size and sha256 of the file, and the files extracted from it.
 
 Neither name matches any state's path_pattern, so standardize ignores them.
+
+Archives are extracted with replace_extracted_files: into a fresh folder
+first, and only when that succeeds do the files move into place, replacing
+files earlier downloads extracted there (those listed in the download log)
+that the new archive doesn't have. Texas splits its data into numbered files,
+so a smaller rebuild used to leave stale numbered files from an older
+download next to the new ones.
+
+A collector raises DownloadError when it could not get what it was asked for,
+so `cft collect` exits non-zero and the run manifest records the failure.
+Collectors that fetch several files (one per year) finish the others first
+and then raise once, naming each file that failed.
 """
 
 from __future__ import annotations
@@ -16,6 +28,8 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import shutil
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import unquote, urlparse
@@ -33,16 +47,22 @@ from utils.provenance import (
 __all__ = [
     "ARCHIVE_DIRECTORY",
     "DOWNLOAD_MANIFEST_NAME",
+    "DownloadError",
     "add_extracted_files",
     "append_download_record",
     "archive_path",
     "read_download_records",
+    "replace_extracted_files",
     "save_response",
 ]
 
 logger = logging.getLogger(__name__)
 
 _CHUNK_BYTES = 1024 * 1024
+
+
+class DownloadError(RuntimeError):
+    """A collector could not download, check or extract what it was asked for"""
 
 
 def archive_path(directory: Path, url: str, retrieved_at: str) -> Path:
@@ -77,13 +97,15 @@ def save_response(
     path: Path,
     record_relative_to: Path,
     retrieved_at: str | None = None,
+    check: Callable[[Path], None] | None = None,
 ) -> dict:
     """Stream a response body to a file and describe the download
 
     The body is written to a temporary file next to path and renamed when
     complete, so an interrupted download never leaves a partial file at path
-    or replaces an earlier file there. If the download fails, the temporary
-    file is deleted and the error is raised again.
+    or replaces an earlier file there. If the download fails, or check
+    rejects the body, the temporary file is deleted and the error is raised
+    again, and an earlier file at path is left as it was.
 
     Args:
         response: Response from requests, ideally made with stream=True so the
@@ -92,6 +114,10 @@ def save_response(
         record_relative_to: Directory the record's paths are written relative
             to (the directory holding the download manifest).
         retrieved_at: When the request was made. Defaults to now.
+        check: Called with the complete temporary file before it replaces
+            path. It should raise (for example DownloadError) if the body is
+            not what was expected, such as an HTML error page sent with
+            status 200.
 
     Returns:
         A download record: url (as requested), final_url (after redirects),
@@ -111,6 +137,8 @@ def save_response(
                 file.write(chunk)
                 digest.update(chunk)
                 size += len(chunk)
+        if check is not None:
+            check(partial_path)
         partial_path.replace(path)
     except BaseException:
         partial_path.unlink(missing_ok=True)
@@ -170,6 +198,96 @@ def add_extracted_files(
     return record
 
 
+def replace_extracted_files(
+    target: Path, records_directory: Path, extract: Callable[[Path], None]
+) -> list[Path]:
+    """Extract an archive into a fresh folder, then move its files into target
+
+    extract(staging) writes the archive's files into an empty hidden folder
+    next to target. When it finishes, files that earlier downloads extracted
+    into target (per the download log in records_directory) and this archive
+    doesn't have are removed, then the new files are moved into target,
+    replacing files with the same names. If extract raises, the staging
+    folder is removed and target is left as it was.
+
+    Files in target that no download record lists (such as files extracted
+    before the log existed) are kept. The log, the archive folder and
+    partial downloads are never written or removed by this: an archive
+    member with one of those names is skipped with a warning, so a bad
+    archive can't rewrite the log that decides what gets removed.
+
+    Args:
+        target: Folder the archive's files belong in.
+        records_directory: Directory holding the download log.
+        extract: Writes the archive's files into the folder it is given.
+
+    Returns:
+        The extracted files' final paths, sorted.
+    """
+    target = Path(target)
+    records_directory = Path(records_directory)
+    staging = target.parent / f".{target.name}.extracting"
+    if staging.exists():
+        shutil.rmtree(staging)
+    staging.mkdir(parents=True)
+    try:
+        extract(staging)
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    new_files = [path for path in staging.rglob("*") if path.is_file()]
+    new_relative = {path.relative_to(staging) for path in new_files}
+
+    resolved_target = target.resolve()
+    for record in read_download_records(records_directory):
+        for extracted in record.get("extracted", []):
+            path = records_directory / extracted["path"]
+            try:
+                relative = path.resolve().relative_to(resolved_target)
+            except ValueError:
+                continue
+            if _is_reserved(relative) or relative in new_relative:
+                continue
+            if path.is_file():
+                path.unlink()
+                print(f"Removed {path}: the new download doesn't have it")
+
+    target.mkdir(parents=True, exist_ok=True)
+    final_paths = []
+    for path in new_files:
+        relative = path.relative_to(staging)
+        if _is_reserved(relative):
+            logger.warning(
+                "%s in the archive is skipped: that name is kept for the"
+                " download log and archives",
+                relative,
+            )
+            continue
+        destination = target / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        path.replace(destination)
+        final_paths.append(destination)
+    shutil.rmtree(staging, ignore_errors=True)
+    return sorted(final_paths)
+
+
+def _is_reserved(relative: Path) -> bool:
+    """True for the paths collect keeps for itself inside a raw data folder
+
+    Args:
+        relative: Path relative to the folder.
+
+    Returns:
+        True for the download log, anything under the archive folder, and
+        partial downloads.
+    """
+    return (
+        relative.parts[:1] == (ARCHIVE_DIRECTORY,)
+        or relative.name == DOWNLOAD_MANIFEST_NAME
+        or relative.name.endswith(PARTIAL_DOWNLOAD_SUFFIX)
+    )
+
+
 def append_download_record(directory: Path, record: dict) -> None:
     """Add a download record to a directory's download manifest
 
@@ -182,7 +300,17 @@ def append_download_record(directory: Path, record: dict) -> None:
     """
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
-    with (directory / DOWNLOAD_MANIFEST_NAME).open("a") as manifest:
+    path = directory / DOWNLOAD_MANIFEST_NAME
+    # a run killed mid-write leaves a last line with no newline; start a
+    # fresh line so this record isn't glued to it and lost with it
+    needs_newline = path.exists() and path.stat().st_size > 0
+    if needs_newline:
+        with path.open("rb") as manifest:
+            manifest.seek(-1, 2)
+            needs_newline = manifest.read(1) != b"\n"
+    with path.open("a") as manifest:
+        if needs_newline:
+            manifest.write("\n")
         manifest.write(json.dumps(record) + "\n")
 
 
@@ -194,11 +322,23 @@ def read_download_records(directory: Path) -> list[dict]:
 
     Returns:
         The records, oldest first, or an empty list if there is no manifest.
+        A line that isn't valid JSON (a run killed mid-write) is skipped with
+        a warning rather than failing every later run.
     """
     path = Path(directory) / DOWNLOAD_MANIFEST_NAME
     if not path.exists():
         return []
-    return [json.loads(line) for line in path.read_text().splitlines() if line]
+    records = []
+    for number, line in enumerate(path.read_text().splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            records.append(json.loads(line))
+        except json.JSONDecodeError as error:
+            logger.warning(
+                "%s line %d is not valid JSON and is skipped: %s", path, number, error
+            )
+    return records
 
 
 def _relative_label(path: Path, directory: Path) -> str:

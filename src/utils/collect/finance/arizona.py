@@ -13,6 +13,17 @@ Data notes:
 - Negative amounts (refunds, loan payments) are shown in parentheses.
 - Lobbyist spending is not distinguished, and spending by political organizations
   is sometimes listed as payments to vendors.
+- The search's Position filter (Support or Oppose) only applies to independent
+  expenditures; the other categories return the same rows whatever it is set
+  to, and the rows themselves don't say which it was. Independent expenditures
+  are fetched once per position, into files named ...-Support.csv and
+  ...-Oppose.csv.
+
+Each search is logged as one line in <raw>/az/_downloads.jsonl (see
+utils.collect.downloads): the query (category, cycle, dates, filer type and
+position), when it ran, how many records it returned, and the file's size and
+sha256. A run writes to hidden temporary files and replaces the previous files
+only when it finishes, so a failed or interrupted run leaves them as they were.
 """
 
 import argparse
@@ -25,8 +36,10 @@ import requests
 from bs4 import BeautifulSoup
 from tqdm import tqdm
 
+from utils.collect.downloads import DownloadError, append_download_record
 from utils.collect.state_collection_registry import register_special_state_collector
 from utils.constants import DATA_DIR
+from utils.provenance import describe_file, utc_now
 
 ADVANCED_SEARCH_URL = "https://seethemoney.az.gov/Reporting/AdvancedSearch/"
 TRANSACTOR_DETAILS_URL = "https://seethemoney.az.gov/Reporting/GetDetailedInformation"
@@ -65,6 +78,20 @@ TRANSACTOR_TYPES_TO_DETAILED_INFO_ID = {
 }
 
 TOO_MANY_REQUESTS = 429
+# How many times a rate-limited (429) request is retried before giving up
+MAX_RATE_LIMIT_RETRIES = 5
+# How many times a page that fails to load is retried before the run fails
+PAGE_RETRIES = 3
+# The server answers some transactor ids with an error or an unexpected body.
+# A few are skipped; if more than this share of a type's ids fail, the run
+# fails and the earlier file is kept, since a rate limit or outage would
+# otherwise leave a nearly empty file that looks complete.
+MAX_SKIPPED_TRANSACTOR_SHARE = 0.05
+# Position values the search accepts. Only independent expenditures differ by
+# position; the other categories return the same rows for any value.
+POSITIONS = ("Support", "Oppose")
+POSITIONS_BY_CATEGORY = {"IndependentExpenditures": POSITIONS}
+NO_POSITION = ("",)
 # Largest page size requested from the advanced search endpoint. Requests take
 # about the same time up to at least 2500 rows, but the server returns HTTP 500
 # for 5000 rows (tested September 2026).
@@ -74,10 +101,24 @@ MAX_PAGE_SIZE = 1000
 class ArizonaAPI:
     """Handles all Arizona Campaign Finance API interactions."""
 
-    def __init__(self, wait_time: float = 0.2, timeout: float = 30) -> None:
-        """Initialize the API client with a session."""
+    def __init__(
+        self,
+        wait_time: float = 0.2,
+        timeout: float = 30,
+        max_rate_limit_retries: int = MAX_RATE_LIMIT_RETRIES,
+    ) -> None:
+        """Initialize the API client with a session.
+
+        Args:
+            wait_time: Seconds to wait before each request.
+            timeout: Seconds to wait for a response. Also the base of the
+                wait between retries of a rate-limited request.
+            max_rate_limit_retries: How many times to retry a request the
+                server rate-limits (HTTP 429) before raising.
+        """
         self.wait_time = wait_time
         self.timeout = timeout
+        self.max_rate_limit_retries = max_rate_limit_retries
         self.session = self._create_session()
         self._simulate_form_interaction()
 
@@ -207,64 +248,6 @@ class ArizonaAPI:
         except ValueError as e:
             raise ValueError(f"Invalid datetime string: {datetime_str}") from e
 
-    def _build_form_data(
-        self,
-        category_type: str,
-        cycle_id: str,
-        start_date: str,
-        end_date: str,
-        filer_type_id: str,
-        start: int = 0,
-        length: int = 10,
-    ) -> str:
-        """Build form data for Arizona Campaign Finance API request."""
-        datatables_params = (
-            f"draw=1&"
-            f"columns[0][data]=TransactionDate&columns[0][name]=&columns[0][searchable]=true&columns[0][orderable]=true&columns[0][search][value]=&columns[0][search][regex]=false&"
-            f"columns[1][data]=CommitteeName&columns[1][name]=&columns[1][searchable]=true&columns[1][orderable]=true&columns[1][search][value]=&columns[1][search][regex]=false&"
-            f"columns[2][data]=Amount&columns[2][name]=&columns[2][searchable]=true&columns[2][orderable]=true&columns[2][search][value]=&columns[2][search][regex]=false&"
-            f"columns[3][data]=TransactionName&columns[3][name]=&columns[3][searchable]=true&columns[3][orderable]=true&columns[3][search][value]=&columns[3][search][regex]=false&"
-            f"columns[4][data]=TransactionType&columns[4][name]=&columns[4][searchable]=true&columns[4][orderable]=true&columns[4][search][value]=&columns[4][search][regex]=false&"
-            f"columns[5][data]=Occupation&columns[5][name]=&columns[5][searchable]=true&columns[5][orderable]=true&columns[5][search][value]=&columns[5][search][regex]=false&"
-            f"columns[6][data]=Employer&columns[6][name]=&columns[6][searchable]=true&columns[6][orderable]=true&columns[6][search][value]=&columns[6][search][regex]=false&"
-            f"columns[7][data]=City&columns[7][name]=&columns[7][searchable]=true&columns[7][orderable]=true&columns[7][search][value]=&columns[7][search][regex]=false&"
-            f"columns[8][data]=State&columns[8][name]=&columns[8][searchable]=true&columns[8][orderable]=true&columns[8][search][value]=&columns[8][search][regex]=false&"
-            f"columns[9][data]=ZipCode&columns[9][name]=&columns[9][searchable]=true&columns[9][orderable]=true&columns[9][search][value]=&columns[9][search][regex]=false&"
-            f"order[0][column]=0&order[0][dir]=asc&"
-            f"start={start}&length={length}&"
-            f"search[value]=&search[regex]=false"
-        )
-
-        search_params = (
-            f"JurisdictionId=0&"
-            f"CommiteeReportId=&"
-            f"CategoryType={category_type}&"
-            f"CycleId={cycle_id}&"
-            f"StartDate={start_date}&"
-            f"EndDate={end_date}&"
-            f"FilerName=&"
-            f"FilerId=&"
-            f"BallotName=&"
-            f"BallotMeasureId=&"
-            f"FilerTypeId={filer_type_id}&"
-            f"OfficeTypeId=&"
-            f"OfficeId=&"
-            f"PartyId=&"
-            f"ContributorName=&"
-            f"VendorName=&"
-            f"StateId=&"
-            f"City=&"
-            f"Employer=&"
-            f"Occupation=&"
-            f"CandidateName=&"
-            f"CandidateFilerId=&"
-            f"Position=Support&"
-            f"LowAmount=&"
-            f"HighAmount="
-        )
-
-        return f"{datatables_params}&{search_params}"
-
     def fetch_transaction_data_page(
         self,
         category_type: str,
@@ -274,6 +257,7 @@ class ArizonaAPI:
         filer_type_id: str,
         start: int = 0,
         length: int = 1000,
+        position: str = "",
     ) -> dict:
         """Fetch a single page of Arizona Campaign Finance transaction data.
 
@@ -285,6 +269,13 @@ class ArizonaAPI:
             filer_type_id: ID of the filer type to filter by
             start: Start index for pagination
             length: Number of records to fetch
+            position: "Support", "Oppose", or "" for both. Only independent
+                expenditures differ by position.
+
+        Raises:
+            requests.HTTPError: if the server answers with an error.
+            DownloadError: if a rate limit (429) persists after
+                max_rate_limit_retries retries.
         """
         # Cap page size; the server errors on very large pages
         page_length = min(int(length), MAX_PAGE_SIZE)
@@ -331,34 +322,50 @@ class ArizonaAPI:
             "Occupation": "",
             "CandidateName": "",
             "CandidateFilerId": "",
-            "Position": "Support",
+            "Position": position,
             "LowAmount": "",
             "HighAmount": "",
         }
 
-        time.sleep(self.wait_time)
-        response = self.session.post(
-            ADVANCED_SEARCH_URL,
-            params=search_query_params,
-            data=datatables_form,
-            timeout=self.timeout,
+        response = self._post_with_rate_limit_retries(
+            ADVANCED_SEARCH_URL, params=search_query_params, data=datatables_form
         )
-
-        if response.status_code == TOO_MANY_REQUESTS:
-            print("Rate limited. Retrying after delay...")
-            time.sleep(self.timeout)
-            return self.fetch_transaction_data_page(
-                category_type,
-                cycle_id,
-                start_date,
-                end_date,
-                filer_type_id,
-                start,
-                length,
-            )
-
         response.raise_for_status()
         return response.json()
+
+    def _post_with_rate_limit_retries(self, url: str, **kwargs) -> requests.Response:
+        """Post a request, retrying while the server rate-limits it
+
+        Args:
+            url: Endpoint to post to.
+            **kwargs: Passed to the session's post, with the timeout.
+
+        Returns:
+            The response, which is not a 429.
+
+        Raises:
+            DownloadError: if the server is still rate-limiting after the
+                last retry. Raised here rather than left to raise_for_status
+                so that a caller which skips an HTTPError for one record
+                doesn't keep hitting a server that has asked it to stop.
+        """
+        for attempt in range(self.max_rate_limit_retries + 1):
+            time.sleep(self.wait_time)
+            response = self.session.post(url, timeout=self.timeout, **kwargs)
+            if response.status_code != TOO_MANY_REQUESTS:
+                return response
+            if attempt < self.max_rate_limit_retries:
+                # wait longer each time
+                wait = self.timeout * (attempt + 1)
+                print(
+                    f"Rate limited. Waiting {wait:.0f}s before retry"
+                    f" {attempt + 1} of {self.max_rate_limit_retries}..."
+                )
+                time.sleep(wait)
+        raise DownloadError(
+            f"{url} still answered 429 Too Many Requests after"
+            f" {self.max_rate_limit_retries} retries"
+        )
 
     def fetch_transactor_data(self, transactor_id: str, transactor_type: str) -> dict:
         """Get Arizona Campaign Finance transactor data by transactor ID.
@@ -369,9 +376,14 @@ class ArizonaAPI:
 
         Returns:
             Dictionary containing transactor data
+
+        Raises:
+            requests.HTTPError: if the server answers with an error.
+            DownloadError: if a rate limit (429) persists after
+                max_rate_limit_retries retries.
+            ValueError: if the body isn't the expected JSON.
         """
-        time.sleep(self.wait_time)
-        response = self.session.post(
+        response = self._post_with_rate_limit_retries(
             TRANSACTOR_DETAILS_URL,
             params={
                 "Page": 11,
@@ -383,7 +395,6 @@ class ArizonaAPI:
                 "Name": f"3~{transactor_id}",
             },
             headers=HEADERS,
-            timeout=self.timeout,
         )
         response.raise_for_status()
 
@@ -407,21 +418,38 @@ class ArizonaDataProcessor:
         save_in_batches: bool = True,
         batch_size: int = 1000,
         early_stop: int | None = None,
+        records_directory: Path | str | None = None,
+        page_retries: int = PAGE_RETRIES,
+        retry_wait: float = 5,
     ) -> None:
         """Initialize the data processor.
 
         Args:
             output_path: Directory to save processed data
-            override_existing_data: If True, overwrite existing data files
+            override_existing_data: If True, the files a query wrote before
+                are replaced once the query finishes. Until then the new
+                results go to a hidden temporary file, so a failed run leaves
+                the previous files as they were. If False, a query resumes
+                from the rows already in its file.
             save_in_batches: If True, save data in batches during processing
             batch_size: Number of records per batch when save_in_batches is True
             early_stop: If not None, stop processing for each type after this many records
+            records_directory: Where to log each query, in _downloads.jsonl
+                (the state's raw data directory). None logs nothing.
+            page_retries: How many times a page that fails to load is retried
+                before the run fails.
+            retry_wait: Seconds to wait before retrying a page.
         """
         self.output_path = Path(output_path)
         self.override_existing_data = override_existing_data
         self.save_in_batches = save_in_batches
         self.batch_size = batch_size
         self.early_stop = early_stop
+        self.records_directory = (
+            Path(records_directory) if records_directory is not None else None
+        )
+        self.page_retries = page_retries
+        self.retry_wait = retry_wait
         self.output_path.mkdir(parents=True, exist_ok=True)
 
     def _get_output_file_path(
@@ -431,15 +459,19 @@ class ArizonaDataProcessor:
         cycle_id: str,
         start_date: datetime.date,
         end_date: datetime.date,
+        position: str = "",
     ) -> Path:
         """Generate output file path for transaction data.
 
-        The requested date range is part of the name so that a file only ever
-        holds the results of a single query, which keeps resuming safe.
+        The requested date range, and the position when there is one, are
+        part of the name so that a file only ever holds the results of a
+        single query, which keeps resuming safe.
         """
         filename = (
             f"{self._get_output_file_prefix(report_category, filer_type_id, cycle_id)}"
-            f"-{start_date:%Y%m%d}-{end_date:%Y%m%d}.csv"
+            f"-{start_date:%Y%m%d}-{end_date:%Y%m%d}"
+            + (f"-{position}" if position else "")
+            + ".csv"
         )
         return self.output_path / filename
 
@@ -449,42 +481,119 @@ class ArizonaDataProcessor:
         """Generate the filename prefix shared by all date ranges of a cycle."""
         return f"{report_category}-{filer_type_id}-{cycle_id.split('~')[0]}"
 
-    def _prepare_output_file(
+    def _existing_query_files(
+        self, report_category: str, filer_type_id: str, cycle_id: str
+    ) -> list[Path]:
+        """Find the files earlier runs wrote for a category, filer type and cycle
+
+        Returns:
+            Files for any date range or position, including files saved
+            before the date range was added to the name.
+        """
+        prefix = self._get_output_file_prefix(report_category, filer_type_id, cycle_id)
+        return [
+            *self.output_path.glob(f"{prefix}-*.csv"),
+            *self.output_path.glob(f"{prefix}.csv"),
+        ]
+
+    def _check_for_conflicting_files(
         self,
-        output_file: Path,
+        output_files: set[Path],
         report_category: str,
         filer_type_id: str,
         cycle_id: str,
-    ) -> int:
-        """Clear or check existing files for a query and return the resume position.
+    ) -> None:
+        """Refuse to resume next to files from a different query
 
-        Files for the same category, filer type, and cycle but a different date
-        range would overlap with the new results. If override_existing_data is
-        True, they are deleted along with output_file. Otherwise an error is raised.
+        Files for the same category, filer type and cycle but a different
+        date range would overlap with the new results. With
+        override_existing_data they are replaced when the query finishes;
+        otherwise an error is raised.
 
-        Returns:
-            Number of records already saved to output_file
+        Raises:
+            ValueError: if resuming would mix results from different queries.
         """
-        prefix = self._get_output_file_prefix(report_category, filer_type_id, cycle_id)
-        existing_files = [
-            *self.output_path.glob(f"{prefix}-*.csv"),
-            # files saved before the date range was added to the name
-            *self.output_path.glob(f"{prefix}.csv"),
-        ]
         if self.override_existing_data:
-            for file in existing_files:
-                file.unlink()
-            return 0
-
-        conflicting_files = [file for file in existing_files if file != output_file]
+            return
+        conflicting_files = [
+            file
+            for file in self._existing_query_files(
+                report_category, filer_type_id, cycle_id
+            )
+            if file not in output_files
+        ]
         if conflicting_files:
+            names = ", ".join(sorted(file.name for file in output_files))
             raise ValueError(
-                f"Found data for a different date range than {output_file.name}: "
+                f"Found data for a different date range than {names}: "
                 f"{', '.join(file.name for file in conflicting_files)}. Resuming "
                 "would mix results from different queries. Use "
                 "override_existing_data or a different output directory."
             )
-        return self._get_resume_position(output_file)
+
+    @staticmethod
+    def _temporary_path(output_file: Path) -> Path:
+        """Where a query's results go until it finishes (override mode)"""
+        return output_file.with_name(f".{output_file.name}.new")
+
+    def _replace_query_files(
+        self,
+        written: dict[Path, Path],
+        report_category: str,
+        filer_type_id: str,
+        cycle_id: str,
+    ) -> None:
+        """Put a finished query's files in place of the earlier run's files
+
+        Args:
+            written: Final path of each of the query's files, mapped to the
+                temporary file its results were written to. A query with no
+                results has no temporary file; the earlier files still go.
+            report_category: Category type (Income, Expenditures, etc.)
+            filer_type_id: ID of the filer type the query was for
+            cycle_id: Election cycle the query was for
+        """
+        for file in self._existing_query_files(
+            report_category, filer_type_id, cycle_id
+        ):
+            file.unlink()
+        for output_file, temporary_file in written.items():
+            if temporary_file.exists():
+                temporary_file.replace(output_file)
+
+    def _log_query(
+        self,
+        output_file: Path,
+        url: str,
+        query: dict,
+        records: int,
+        retrieved_at: str,
+    ) -> None:
+        """Record a finished query in the download log, if one is kept
+
+        Args:
+            output_file: File the results were written to.
+            url: Endpoint queried.
+            query: The query's parameters.
+            records: How many records the query returned.
+            retrieved_at: When the query started.
+        """
+        if self.records_directory is None:
+            return
+        record = {
+            "url": url,
+            "retrieved_at": retrieved_at,
+            "finished_at": utc_now(),
+            "query": query,
+            "records": records,
+        }
+        if output_file.exists():
+            record.update(
+                describe_file(output_file, relative_to=self.records_directory)
+            )
+        else:
+            record.update({"path": output_file.name, "size": 0, "sha256": None})
+        append_download_record(self.records_directory, record)
 
     def _get_transactor_file_path(self, transactor_type: str) -> Path:
         """Generate output file path for transactor data."""
@@ -522,8 +631,15 @@ class ArizonaDataProcessor:
         filer_type_id: str,
         start_date_override: str | None = None,
         end_date_override: str | None = None,
+        positions: tuple[str, ...] = NO_POSITION,
     ) -> pd.DataFrame:
         """Process transaction data for given parameters.
+
+        Each position is one query with its own file. With
+        override_existing_data, the results are written to hidden temporary
+        files and replace the earlier run's files for this category, filer
+        type and cycle only when every position has finished, so a failed
+        run leaves the earlier files as they were.
 
         Args:
             api: ArizonaAPI instance for making API calls
@@ -532,9 +648,16 @@ class ArizonaDataProcessor:
             filer_type_id: ID of the filer type to filter by
             start_date_override: Optional YYYY-MM-DD to override cycle start (intersected)
             end_date_override: Optional YYYY-MM-DD to override cycle end (intersected)
+            positions: Position values to query, one file each. ("",) for
+                categories the position doesn't apply to.
 
         Returns:
-            DataFrame containing processed transaction data
+            DataFrame containing the transactions fetched by this call, with
+            a Position column when positions were queried.
+
+        Raises:
+            DownloadError: if a page could not be fetched after page_retries
+                retries.
         """
         cycle_start_date, cycle_end_date = api._extract_date_range_from_cycle_id(
             election_cycle
@@ -566,85 +689,191 @@ class ArizonaDataProcessor:
         if request_start_date > request_end_date:
             # No overlap between requested date range and this cycle
             return pd.DataFrame()
-        output_file = self._get_output_file_path(
-            report_category,
-            filer_type_id,
-            election_cycle,
-            request_start_date,
-            request_end_date,
+        output_files = {
+            position: self._get_output_file_path(
+                report_category,
+                filer_type_id,
+                election_cycle,
+                request_start_date,
+                request_end_date,
+                position,
+            )
+            for position in positions
+        }
+        self._check_for_conflicting_files(
+            set(output_files.values()), report_category, filer_type_id, election_cycle
         )
 
-        start_position = self._prepare_output_file(
-            output_file, report_category, filer_type_id, election_cycle
-        )
+        frames = []
+        queries = []
+        written = {}
+        try:
+            for position, output_file in output_files.items():
+                if self.override_existing_data:
+                    write_path = self._temporary_path(output_file)
+                    write_path.unlink(missing_ok=True)
+                    start_position = 0
+                else:
+                    write_path = output_file
+                    start_position = self._get_resume_position(output_file)
+                written[output_file] = write_path
+                query = {
+                    "CategoryType": report_category,
+                    "CycleId": election_cycle,
+                    "StartDate": request_start_date.strftime("%Y-%m-%d"),
+                    "EndDate": request_end_date.strftime("%Y-%m-%d"),
+                    "FilerTypeId": filer_type_id,
+                    "Position": position,
+                }
+                retrieved_at = utc_now()
+                records = self._fetch_all_pages(api, query, start_position, write_path)
+                frame = pd.DataFrame(records)
+                if position:
+                    frame["Position"] = position
+                frames.append(frame)
+                queries.append((output_file, query, len(records), retrieved_at))
+        except BaseException:
+            if self.override_existing_data:
+                for write_path in written.values():
+                    write_path.unlink(missing_ok=True)
+            raise
+
+        if self.override_existing_data:
+            self._replace_query_files(
+                written, report_category, filer_type_id, election_cycle
+            )
+        for output_file, query, count, retrieved_at in queries:
+            self._log_query(
+                output_file, ADVANCED_SEARCH_URL, query, count, retrieved_at
+            )
+
+        complete_data = pd.concat(frames, ignore_index=True)
+        if complete_data.empty:
+            print("No records found")
+            return pd.DataFrame()
+        print(f"Retrieved {len(complete_data)} total records")
+        return complete_data
+
+    def _fetch_all_pages(
+        self, api: ArizonaAPI, query: dict, start_position: int, write_path: Path
+    ) -> list[dict]:
+        """Page through one query's results, saving batches as they arrive
+
+        Args:
+            api: ArizonaAPI instance for making API calls
+            query: CategoryType, CycleId, StartDate, EndDate, FilerTypeId and
+                Position for the search.
+            start_position: Record to start from (rows already saved).
+            write_path: File to append batches to.
+
+        Returns:
+            The records fetched by this call.
+        """
         all_records = []
         # batch_size is None when data is not saved in batches
         page_size = min(self.batch_size or MAX_PAGE_SIZE, MAX_PAGE_SIZE)
         progress_bar = None
 
         while True:
-            try:
-                response_data = api.fetch_transaction_data_page(
-                    category_type=report_category,
-                    cycle_id=election_cycle,
-                    start_date=request_start_date.strftime("%Y-%m-%d"),
-                    end_date=request_end_date.strftime("%Y-%m-%d"),
-                    filer_type_id=filer_type_id,
-                    start=start_position,
-                    length=page_size,
+            response_data = self._fetch_page_with_retries(
+                api, query, start_position, page_size
+            )
+
+            if not response_data["data"]:
+                break
+
+            records = response_data["data"]
+            all_records.extend(records)
+
+            # Save in batches if enabled
+            if self.save_in_batches:
+                self._save_batch_data(records, write_path)
+
+            # Initialize progress bar after first successful request
+            total_records = response_data.get(
+                "recordsFiltered", response_data.get("recordsTotal", 0)
+            )
+            if progress_bar is None and total_records > 0:
+                progress_bar = tqdm(
+                    total=total_records - start_position,
+                    desc=(
+                        f"Processing {query['CategoryType']} data for cycle"
+                        f" {query['CycleId']} and filer type {query['FilerTypeId']}"
+                        + (f" ({query['Position']})" if query["Position"] else "")
+                    ),
+                    unit="records",
                 )
+            if progress_bar:
+                progress_bar.update(len(records))
 
-                if "data" not in response_data or not response_data["data"]:
-                    break
+            # Advance by the number of records actually returned
+            start_position += len(records)
 
-                records = response_data["data"]
-                all_records.extend(records)
+            # Stop once we've reached the total number of records
+            if total_records and start_position >= total_records:
+                break
 
-                # Save in batches if enabled
-                if self.save_in_batches:
-                    self._save_batch_data(records, output_file)
-
-                # Initialize progress bar after first successful request
-                total_records = response_data.get(
-                    "recordsFiltered", response_data.get("recordsTotal", 0)
-                )
-                if progress_bar is None and total_records > 0:
-                    progress_bar = tqdm(
-                        total=total_records - start_position,
-                        desc=f"Processing {report_category} data for cycle {election_cycle} and filer type {filer_type_id}",
-                        unit="records",
-                    )
-                if progress_bar:
-                    progress_bar.update(len(records))
-
-                # Advance by the number of records actually returned
-                start_position += len(records)
-
-                # Stop once we've reached the total number of records
-                if total_records and start_position >= total_records:
-                    break
-
-                if self.early_stop and len(all_records) >= self.early_stop:
-                    break
-
-            except Exception as e:
-                print(f"Error fetching data at offset {start_position}: {e}")
+            if self.early_stop and len(all_records) >= self.early_stop:
                 break
 
         if progress_bar:
             progress_bar.close()
 
-        if not all_records:
-            print("No records found")
-            return pd.DataFrame()
-
         # Save final data if not saving in batches
         if not self.save_in_batches:
-            self._save_batch_data(all_records, output_file)
+            self._save_batch_data(all_records, write_path)
+        return all_records
 
-        complete_data = pd.DataFrame(all_records)
-        print(f"Retrieved {len(complete_data)} total records")
-        return complete_data
+    def _fetch_page_with_retries(
+        self, api: ArizonaAPI, query: dict, start: int, length: int
+    ) -> dict:
+        """Fetch one page, retrying a failed request before giving up
+
+        Args:
+            api: ArizonaAPI instance for making API calls
+            query: The search parameters (see _fetch_all_pages).
+            start: Record to start the page at.
+            length: Records per page.
+
+        Returns:
+            The page, as the server returned it. It has a "data" list, which
+            is empty once the results are exhausted.
+
+        Raises:
+            DownloadError: if the page still fails after page_retries
+                retries, or the server keeps answering with a body that has
+                no "data" (such as an error message sent with status 200).
+        """
+        for attempt in range(self.page_retries + 1):
+            try:
+                page = api.fetch_transaction_data_page(
+                    category_type=query["CategoryType"],
+                    cycle_id=query["CycleId"],
+                    start_date=query["StartDate"],
+                    end_date=query["EndDate"],
+                    filer_type_id=query["FilerTypeId"],
+                    start=start,
+                    length=length,
+                    position=query["Position"],
+                )
+                if not isinstance(page, dict) or not isinstance(page.get("data"), list):
+                    raise ValueError(
+                        f"the response has no data list: {str(page)[:200]}"
+                    )
+                return page
+            except (requests.RequestException, ValueError) as error:
+                if attempt == self.page_retries:
+                    raise DownloadError(
+                        f"Could not fetch {query['CategoryType']} records at offset"
+                        f" {start} after {attempt + 1} tries: {error}"
+                    ) from error
+                print(
+                    f"Error fetching data at offset {start} (try {attempt + 1} of"
+                    f" {self.page_retries + 1}): {error}. Retrying in"
+                    f" {self.retry_wait:g}s..."
+                )
+                time.sleep(self.retry_wait)
+        raise AssertionError("unreachable")  # pragma: no cover
 
     def process_transactor_data(
         self,
@@ -654,13 +883,26 @@ class ArizonaDataProcessor:
     ) -> dict[str, pd.DataFrame]:
         """Process transactor data for given transactor IDs.
 
+        Each type's results are written to its file (<type>.csv) when the
+        type finishes, or in batches along the way with save_in_batches.
+        With override_existing_data, they go to a hidden temporary file that
+        replaces the earlier file only once the type finishes; a run that
+        fails leaves the earlier file as it was. Ids the server rejects are
+        printed and skipped, but if more than MAX_SKIPPED_TRANSACTOR_SHARE
+        of a type's ids are skipped the run fails, since a rate limit or
+        outage would otherwise leave a nearly empty file that looks complete.
+
         Args:
             api: ArizonaAPI instance for making API calls
             transactor_ids_by_type: Dictionary of transactor type to set of transactor IDs
             transactor_batch_size: Number of transactor IDs to process at a time
 
         Returns:
-            Dictionary of transactor type to DataFrame
+            Dictionary of transactor type to the records fetched
+
+        Raises:
+            DownloadError: if more than MAX_SKIPPED_TRANSACTOR_SHARE of a
+                type's ids could not be fetched.
         """
         all_transactor_data = {}
         total_transactors = sum(len(ids) for ids in transactor_ids_by_type.values())
@@ -675,55 +917,135 @@ class ArizonaDataProcessor:
                     continue
 
                 output_file = self._get_transactor_file_path(transactor_type)
-                if self.override_existing_data and output_file.exists():
-                    output_file.unlink()
-                elif not self.override_existing_data and output_file.exists():
-                    print("Appending results to existing file")
+                if self.override_existing_data:
+                    write_path = self._temporary_path(output_file)
+                    write_path.unlink(missing_ok=True)
+                else:
+                    write_path = output_file
+                    if output_file.exists():
+                        print("Appending results to existing file")
 
-                all_transactor_data[transactor_type] = []
+                retrieved_at = utc_now()
+                results = []
+                skipped = 0
                 transactor_ids_list = list(transactor_ids)
+                try:
+                    with tqdm(
+                        total=len(transactor_ids_list),
+                        desc=f"Processing {transactor_type} transactors",
+                        unit="transactor",
+                        leave=False,
+                    ) as type_pbar:
+                        for i in range(
+                            0, len(transactor_ids_list), transactor_batch_size
+                        ):
+                            batch_results, batch_skipped = self._fetch_transactors(
+                                api,
+                                transactor_ids_list[i : i + transactor_batch_size],
+                                transactor_type,
+                                i // transactor_batch_size + 1,
+                                (type_pbar, overall_pbar),
+                            )
+                            skipped += batch_skipped
+                            # checked after every batch: once too many ids
+                            # have been skipped the type can't finish, so
+                            # stop asking the server
+                            self._check_skipped_share(
+                                skipped, len(transactor_ids_list), transactor_type
+                            )
+                            if batch_results and self.save_in_batches:
+                                self._save_batch_data(batch_results, write_path)
+                            results.extend(batch_results)
+                    if not self.save_in_batches:
+                        self._save_batch_data(results, write_path)
+                except BaseException:
+                    if self.override_existing_data:
+                        write_path.unlink(missing_ok=True)
+                    raise
 
-                with tqdm(
-                    total=len(transactor_ids_list),
-                    desc=f"Processing {transactor_type} transactors",
-                    unit="transactor",
-                    leave=False,
-                ) as type_pbar:
-                    for i in range(0, len(transactor_ids_list), transactor_batch_size):
-                        batch_transactor_ids = transactor_ids_list[
-                            i : i + transactor_batch_size
-                        ]
-                        batch_results = []
-
-                        with tqdm(
-                            total=len(batch_transactor_ids),
-                            desc=f"Processing batch {i // transactor_batch_size + 1}",
-                            unit="transactor",
-                            leave=False,
-                        ) as batch_pbar:
-                            for transactor_id in batch_transactor_ids:
-                                try:
-                                    single_transactor_details = (
-                                        api.fetch_transactor_data(
-                                            transactor_id, transactor_type
-                                        )
-                                    )
-                                    batch_results.append(single_transactor_details)
-                                except (ValueError, requests.HTTPError) as e:
-                                    print(
-                                        f"Error fetching data for {transactor_id}: {e}"
-                                    )
-                                finally:
-                                    batch_pbar.update(1)
-                                    type_pbar.update(1)
-                                    overall_pbar.update(1)
-
-                        if batch_results:
-                            if self.save_in_batches:
-                                self._save_batch_data(batch_results, output_file)
-                            all_transactor_data[transactor_type].extend(batch_results)
+                if self.override_existing_data:
+                    write_path.replace(output_file)
+                all_transactor_data[transactor_type] = results
+                self._log_query(
+                    output_file,
+                    TRANSACTOR_DETAILS_URL,
+                    {
+                        "transactor_type": transactor_type,
+                        "requested_ids": len(transactor_ids_list),
+                        "skipped_ids": skipped,
+                    },
+                    len(results),
+                    retrieved_at,
+                )
 
         return all_transactor_data
+
+    def _check_skipped_share(self, skipped: int, requested: int, kind: str) -> None:
+        """Fail the run once too many of a type's ids have been skipped
+
+        Args:
+            skipped: Ids the server rejected so far.
+            requested: Ids asked for in total.
+            kind: The transactor type, for the message.
+
+        Raises:
+            DownloadError: if skipped is more than MAX_SKIPPED_TRANSACTOR_SHARE
+                of requested.
+        """
+        if skipped > MAX_SKIPPED_TRANSACTOR_SHARE * requested:
+            kept = (
+                f", so {kind}.csv was not replaced"
+                if self.override_existing_data
+                else ""
+            )
+            raise DownloadError(
+                f"{skipped} of {requested} {kind} ids could not be fetched (more"
+                f" than {MAX_SKIPPED_TRANSACTOR_SHARE:.0%}){kept}"
+            )
+
+    def _fetch_transactors(
+        self,
+        api: ArizonaAPI,
+        transactor_ids: list[str],
+        transactor_type: str,
+        batch_number: int,
+        progress_bars: tuple[tqdm, ...],
+    ) -> tuple[list[dict], int]:
+        """Fetch one batch of transactors, skipping ones the server rejects
+
+        Args:
+            api: ArizonaAPI instance for making API calls
+            transactor_ids: IDs in this batch
+            transactor_type: Type of the transactors (Committee, Candidate, etc.)
+            batch_number: Which batch this is, for the progress bar
+            progress_bars: Bars to advance by one per transactor
+
+        Returns:
+            The records fetched, and how many ids were skipped. A transactor
+            the server answers with an error or an unexpected body is
+            printed and skipped; a failed request is raised.
+        """
+        batch_results = []
+        skipped = 0
+        with tqdm(
+            total=len(transactor_ids),
+            desc=f"Processing batch {batch_number}",
+            unit="transactor",
+            leave=False,
+        ) as batch_pbar:
+            for transactor_id in transactor_ids:
+                try:
+                    batch_results.append(
+                        api.fetch_transactor_data(transactor_id, transactor_type)
+                    )
+                except (ValueError, requests.HTTPError) as e:
+                    print(f"Error fetching data for {transactor_id}: {e}")
+                    skipped += 1
+                finally:
+                    batch_pbar.update(1)
+                    for progress_bar in progress_bars:
+                        progress_bar.update(1)
+        return batch_results, skipped
 
     def get_transactor_ids_from_transactions(self) -> dict[str, set[str]]:
         """Get transactor IDs from existing transaction files."""
@@ -814,6 +1136,7 @@ class ArizonaDataProcessor:
                         filer_type_id=filer_type_id,
                         start_date_override=start_date,
                         end_date_override=end_date,
+                        positions=POSITIONS_BY_CATEGORY.get(category_name, NO_POSITION),
                     )
                     partial_df["filer_type"] = filer_type
                     all_category_data.append(partial_df)
@@ -869,13 +1192,18 @@ def get_all_arizona_data(
         start_year: Start year for data collection
         end_year: End year for data collection
         output_directory: Directory to save the dataframes to
-        override_existing_data: If True, existing data will be overwritten
+        override_existing_data: If True, each query's earlier files are
+            replaced when the query finishes (see ArizonaDataProcessor)
         chunk_size: If set, data will be saved in chunks of this size
         start_date: Optional YYYY-MM-DD to override year-based start date
         end_date: Optional YYYY-MM-DD to override year-based end date
 
     Returns:
         Dictionary containing both transaction and transactor data
+
+    Raises:
+        DownloadError: if a page of results could not be fetched after
+            retries. Files from earlier runs are left as they were.
     """
     if output_directory is None:
         output_directory = DATA_DIR / "raw" / "az" / "AdvancedSearch"
@@ -888,6 +1216,8 @@ def get_all_arizona_data(
         override_existing_data=override_existing_data,
         save_in_batches=chunk_size is not None,
         batch_size=chunk_size,
+        # the query log sits next to the other states' download logs
+        records_directory=output_directory.parent,
     )
 
     # Get transaction data

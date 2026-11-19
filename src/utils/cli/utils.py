@@ -443,6 +443,10 @@ def route_pipeline_step(
 
     Returns:
         int: 0 if successful
+
+    Raises:
+        RuntimeError: if several states were requested and any of them
+            failed, after the others have run (see _run_steps_locally).
     """
     args = validate_args(
         args,
@@ -481,11 +485,45 @@ def route_pipeline_step(
             for job_args in job_args_list:
                 executor.submit(run_step_with_manifest, job_args)
     else:
-        for job_args in job_args_list:
-            if "state" in job_args:
-                print(f"Running pipeline step for {job_args.state}")
-            run_step_with_manifest(job_args)
+        _run_steps_locally(args.command, job_args_list)
     return 0
+
+
+def _run_steps_locally(command: str, job_args_list: list[argparse.Namespace]) -> None:
+    """Run each state's step in turn, finishing the others when one fails
+
+    Each state's run manifest records its own success or failure. With one
+    state, its error is raised as is. With several, every state is run and
+    then one error names the states that failed, so a scripted multi-state
+    run exits non-zero without skipping the states after the first failure.
+    This is the local path only: with --slurm each job fails on its own and
+    the submitting command still exits 0.
+
+    Args:
+        command: The step being run, for the error message.
+        job_args_list: Parsed arguments for each run.
+
+    Raises:
+        RuntimeError: if more than one state was requested and any failed.
+    """
+    if len(job_args_list) == 1:
+        run_step_with_manifest(job_args_list[0])
+        return
+    failures = []
+    for job_args in job_args_list:
+        state = getattr(job_args, "state", None)
+        print(f"Running pipeline step for {state}")
+        try:
+            run_step_with_manifest(job_args)
+        except Exception as error:
+            print(f"{command} failed for {state}: {error}")
+            failures.append((state, error))
+    if failures:
+        raise RuntimeError(
+            f"{command} failed for {', '.join(str(state) for state, _ in failures)}."
+            " Each state's error is printed above and recorded in its"
+            " _run_manifest.json."
+        ) from failures[0][1]
 
 
 def create_subparsers(
