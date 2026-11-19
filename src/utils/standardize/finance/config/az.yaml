@@ -397,6 +397,10 @@ advanced_search_transactions:
   inherits: base
   path_pattern: "^AdvancedSearch/(BallotMeasures|Income|Expenditures|IndependentExpenditures)-.*\\.csv$"
   table_name: Transaction
+  # each file lists the filing committee's transactions; the committee is the
+  # recipient unless transaction_direction reverses the row, which switches
+  # reported_by to donor as well
+  reported_by: recipient
   duplicate_columns:
     transaction_type:
       - transaction_direction
@@ -745,6 +749,8 @@ mdb:
 mdb_transactions:
   inherits: mdb
   table_name: Transaction
+  # rows are the filing committee's; reversed rows switch to donor
+  reported_by: recipient
   duplicate_columns:
     transaction_type:
       - transaction_direction

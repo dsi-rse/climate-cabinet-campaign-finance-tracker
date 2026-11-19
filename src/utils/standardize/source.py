@@ -424,6 +424,7 @@ class SchemaTransformer:
         self.new_empty_columns = config_handler.new_empty_columns
         self.state_code_columns = config_handler.state_code_columns
         self.state_code = config_handler.state_code
+        self.reported_by = config_handler.reported_by
         self.overloaded_columns = config_handler.overloaded_columns
 
     def _split_overloaded_columns(
@@ -493,6 +494,16 @@ class SchemaTransformer:
             standard_data_table[column] = self.state_code
         return standard_data_table
 
+    def _add_reported_by(self, standard_data_table: pd.DataFrame) -> pd.DataFrame:
+        """Record which party filed the rows, when the form says
+
+        Rows that transaction_direction later reverses get the other value
+        (see DataStandardizer._standardize_transaction_direction).
+        """
+        if self.reported_by is not None:
+            standard_data_table["reported_by"] = self.reported_by
+        return standard_data_table
+
     def standardize_schema(self, raw_data_table: pd.DataFrame) -> pd.DataFrame:
         """Rename columns, remove unused columns, and add missing columns
 
@@ -503,6 +514,9 @@ class SchemaTransformer:
         relevant_raw_table = self._drop_unused_columns(raw_data_table)
         standard_relevant_column_table = self._rename_columns(relevant_raw_table)
         standard_relevant_column_table = self._add_state_code(
+            standard_relevant_column_table
+        )
+        standard_relevant_column_table = self._add_reported_by(
             standard_relevant_column_table
         )
         standard_relevant_column_table = self._add_new_columns(
@@ -682,8 +696,10 @@ class DataStandardizer:
 
         In state config, if a raw column is mapped to transaction_direction and
         the enum mapper maps some values to 'reverse' those rows will switch
-        donor and recipient columns. Rows keep their original order, and the
-        transaction_direction column is dropped once it has been applied.
+        donor and recipient columns, and their reported_by (the party whose
+        report they come from) switches with them. Rows keep their original
+        order, and the transaction_direction column is dropped once it has
+        been applied.
         """
         if "transaction_direction" not in standard_schema_table.columns:
             return standard_schema_table
@@ -693,6 +709,10 @@ class DataStandardizer:
         reverse_table = standard_schema_table.loc[reverse_mask, :].rename(
             columns=_swap_party_prefix
         )
+        if "reported_by" in reverse_table.columns:
+            reverse_table["reported_by"] = reverse_table["reported_by"].map(
+                {"donor": "recipient", "recipient": "donor"}
+            )
         standard_direction_table = pd.concat(
             [standard_schema_table.loc[~reverse_mask, :], reverse_table]
         )

@@ -13,6 +13,8 @@ base:
 legacy_download_contributions_or_receipts:
   inherits: base
   table_name: Transaction
+  # filed by the committee that received the money
+  reported_by: recipient
   path_pattern: "^LegacyDownloads/(\\d{4})/(\\d{4})_mi_cfr_(contributions|receipts).*\\.csv$"
   
   enum_mapper:
@@ -156,6 +158,8 @@ legacy_download_expenditures:
   inherits: base
   table_name: Transaction
   path_pattern: "^LegacyDownloads/(\\d{4})/(\\d{4})_mi_cfr_expenditures.*\\.csv$"
+  # filed by the committee that paid
+  reported_by: donor
 
   enum_mapper:
     donor--transactor_type: *committee_transactor_type

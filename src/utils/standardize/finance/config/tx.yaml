@@ -22,6 +22,8 @@ contributions:
   filter:
     infoOnlyFlag:
       - "N"
+  # filed by the committee that received the money
+  reported_by: recipient
   duplicate_columns:
     recipient--transactor_type:
       - recipient--transactor_type_specific
@@ -235,6 +237,8 @@ expenditures:
   inherits: contributions
   table_name: Transaction
   path_pattern: ^expend_\d{2,}\.csv$
+  # filed by the committee that paid
+  reported_by: donor
   duplicate_columns:
     donor--transactor_type_specific:
       - donor--transactor_type

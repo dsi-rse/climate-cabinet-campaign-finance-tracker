@@ -62,6 +62,40 @@ def assert_row(row: pd.Series, expected: dict) -> None:
     assert actual == expected
 
 
+# ---- reported_by: which party filed the row ----
+
+
+@pytest.mark.parametrize(
+    ("state", "form", "expected"),
+    [
+        ("pa", "contributions", "recipient"),
+        ("pa", "expense", "donor"),
+        ("mi", "legacy_download_contributions_or_receipts", "recipient"),
+        ("mi", "legacy_download_expenditures", "donor"),
+        ("tx", "contributions", "recipient"),
+        ("tx", "expenditures", "donor"),
+        ("mn", "contributions", "recipient"),
+        ("mn", "expenditures", "donor"),
+        ("mn", "independent_expenditures", "donor"),
+    ],
+)
+def test_reported_by_is_the_party_that_filed(state, form, expected):
+    """A contribution file is the recipient's report; an expenditure file the payer's"""
+    table = standardize(state, form)
+    assert set(table["reported_by"]) == {expected}
+
+
+def test_az_reported_by_follows_the_direction_of_each_row(
+    az_advanced_search, az_access_export
+):
+    """Arizona files mix income and payments; reversed rows are the payer's report"""
+    assert only_row(az_advanced_search, "amount", 150.0)["reported_by"] == "recipient"
+    assert only_row(az_advanced_search, "amount", 250.0)["reported_by"] == "donor"
+    by_type = az_access_export.groupby("transaction_type")["reported_by"].agg(set)
+    assert by_type["contribution"] == {"recipient"}
+    assert by_type["expense"] == {"donor"}
+
+
 # ---- Arizona ----
 
 

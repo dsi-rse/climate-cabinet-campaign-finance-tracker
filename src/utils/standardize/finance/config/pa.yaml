@@ -31,6 +31,8 @@ base:
 contributions:
   inherits: base
   table_name: Transaction
+  # filed by the committee that received the money
+  reported_by: recipient
   column_details:
     - raw_name: CampaignFinanceID
       type: str
@@ -351,6 +353,8 @@ filer_2002:
 expense:
   inherits: base
   table_name: Transaction
+  # filed by the committee that paid
+  reported_by: donor
   path_pattern: "(?i)^((?!2002)\\d{4})/expense.*\\.txt$"
   column_details:
     - raw_name: CampaignFinanceID
