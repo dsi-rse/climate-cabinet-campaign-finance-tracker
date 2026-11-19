@@ -282,7 +282,7 @@ def _is_reserved(relative: Path) -> bool:
         partial downloads.
     """
     return (
-        relative.parts[0] == ARCHIVE_DIRECTORY
+        relative.parts[:1] == (ARCHIVE_DIRECTORY,)
         or relative.name == DOWNLOAD_MANIFEST_NAME
         or relative.name.endswith(PARTIAL_DOWNLOAD_SUFFIX)
     )
@@ -300,7 +300,17 @@ def append_download_record(directory: Path, record: dict) -> None:
     """
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
-    with (directory / DOWNLOAD_MANIFEST_NAME).open("a") as manifest:
+    path = directory / DOWNLOAD_MANIFEST_NAME
+    # a run killed mid-write leaves a last line with no newline; start a
+    # fresh line so this record isn't glued to it and lost with it
+    needs_newline = path.exists() and path.stat().st_size > 0
+    if needs_newline:
+        with path.open("rb") as manifest:
+            manifest.seek(-1, 2)
+            needs_newline = manifest.read(1) != b"\n"
+    with path.open("a") as manifest:
+        if needs_newline:
+            manifest.write("\n")
         manifest.write(json.dumps(record) + "\n")
 
 

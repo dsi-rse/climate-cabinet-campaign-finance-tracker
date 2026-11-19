@@ -813,5 +813,10 @@ def test_a_damaged_log_line_is_skipped_not_fatal(tmp_path, fake_response, caplog
     assert len(records) == 1
     assert "line 2 is not valid JSON" in caplog.text
 
+    # the next record starts on its own line, so it isn't lost with the damaged one
     run_tx_collector(tmp_path, good, fake_response, "2026-11-10T06:00:00+00:00")
     assert (tmp_path / "contribs_01.csv").read_bytes() == b"a\n"
+    assert [record["retrieved_at"] for record in read_download_records(tmp_path)] == [
+        "2026-11-09T06:00:00+00:00",
+        "2026-11-10T06:00:00+00:00",
+    ]

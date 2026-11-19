@@ -355,19 +355,37 @@ def test_a_few_committees_the_server_rejects_are_skipped_and_the_rest_saved(
 
 
 def test_too_many_rejected_committees_fail_the_run_and_keep_the_file(tmp_path):
-    """Under a rate limit every id is rejected; the old file must survive"""
+    """Once too many ids are rejected the run stops asking and keeps the file"""
     previous = tmp_path / "Committee.csv"
     pd.DataFrame({"CommitteeID": [9], "Name": ["Old"]}).to_csv(previous, index=False)
     api = FakeArizonaAPI(0, transactors={"1": {"Name": "A"}})
     processor = ArizonaDataProcessor(output_path=tmp_path, override_existing_data=True)
 
     with pytest.raises(
-        DownloadError, match="1 of 2 Committee ids could not be fetched"
+        DownloadError, match="1 of 2 Committee ids could not be fetched.*not replaced"
     ):
-        processor.process_transactor_data(api, {"Committee": ["1", "missing"]})
+        processor.process_transactor_data(
+            api, {"Committee": ["missing", "1"]}, transactor_batch_size=1
+        )
 
+    # the second id was never requested
+    assert api.transactor_calls == ["missing"]
     assert pd.read_csv(previous)["Name"].tolist() == ["Old"]
     assert [f.name for f in tmp_path.iterdir()] == ["Committee.csv"]
+
+
+def test_a_persistent_rate_limit_on_committees_fails_the_run_at_once(fake_response):
+    """A 429 that outlasts the retries is raised, not counted as one rejected id"""
+    too_many = fake_response(status_code=429, reason="Too Many Requests")
+    api, session, sleep = rate_limited_api([too_many] * 3, fake_response)
+
+    with (
+        mock.patch.object(arizona.time, "sleep", sleep),
+        pytest.raises(DownloadError, match="still answered 429.*after 2 retries"),
+    ):
+        api.fetch_transactor_data("1", "Committee")
+
+    assert session.post.call_count == 4
 
 
 def test_a_page_without_a_data_list_is_an_error_not_the_end_of_the_results(tmp_path):
@@ -474,7 +492,7 @@ def test_rate_limit_retries_stop_after_the_cap(fake_response):
         mock.patch.object(arizona.time, "sleep") as sleep,
     ):
         api = ArizonaAPI(wait_time=0, timeout=7, max_rate_limit_retries=2)
-        with pytest.raises(requests.HTTPError, match="429"):
+        with pytest.raises(DownloadError, match="429 Too Many Requests"):
             api.fetch_transaction_data_page(
                 "Income", CYCLE_ID, "2023-01-01", "2024-12-31", "130"
             )

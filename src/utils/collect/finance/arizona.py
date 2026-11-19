@@ -273,8 +273,8 @@ class ArizonaAPI:
                 expenditures differ by position.
 
         Raises:
-            requests.HTTPError: if the server answers with an error, including
-                a rate limit (429) that persists after
+            requests.HTTPError: if the server answers with an error.
+            DownloadError: if a rate limit (429) persists after
                 max_rate_limit_retries retries.
         """
         # Cap page size; the server errors on very large pages
@@ -341,14 +341,19 @@ class ArizonaAPI:
             **kwargs: Passed to the session's post, with the timeout.
 
         Returns:
-            The last response. It is a 429 if every retry was rate-limited;
-            the caller's raise_for_status turns that into an HTTPError.
+            The response, which is not a 429.
+
+        Raises:
+            DownloadError: if the server is still rate-limiting after the
+                last retry. Raised here rather than left to raise_for_status
+                so that a caller which skips an HTTPError for one record
+                doesn't keep hitting a server that has asked it to stop.
         """
         for attempt in range(self.max_rate_limit_retries + 1):
             time.sleep(self.wait_time)
             response = self.session.post(url, timeout=self.timeout, **kwargs)
             if response.status_code != TOO_MANY_REQUESTS:
-                break
+                return response
             if attempt < self.max_rate_limit_retries:
                 # wait longer each time
                 wait = self.timeout * (attempt + 1)
@@ -357,7 +362,10 @@ class ArizonaAPI:
                     f" {attempt + 1} of {self.max_rate_limit_retries}..."
                 )
                 time.sleep(wait)
-        return response
+        raise DownloadError(
+            f"{url} still answered 429 Too Many Requests after"
+            f" {self.max_rate_limit_retries} retries"
+        )
 
     def fetch_transactor_data(self, transactor_id: str, transactor_type: str) -> dict:
         """Get Arizona Campaign Finance transactor data by transactor ID.
@@ -370,9 +378,9 @@ class ArizonaAPI:
             Dictionary containing transactor data
 
         Raises:
-            requests.HTTPError: if the server answers with an error, including
-                a rate limit that persists after max_rate_limit_retries
-                retries.
+            requests.HTTPError: if the server answers with an error.
+            DownloadError: if a rate limit (429) persists after
+                max_rate_limit_retries retries.
             ValueError: if the body isn't the expected JSON.
         """
         response = self._post_with_rate_limit_retries(
@@ -939,18 +947,15 @@ class ArizonaDataProcessor:
                                 (type_pbar, overall_pbar),
                             )
                             skipped += batch_skipped
+                            # checked after every batch: once too many ids
+                            # have been skipped the type can't finish, so
+                            # stop asking the server
+                            self._check_skipped_share(
+                                skipped, len(transactor_ids_list), transactor_type
+                            )
                             if batch_results and self.save_in_batches:
                                 self._save_batch_data(batch_results, write_path)
                             results.extend(batch_results)
-                    if skipped > MAX_SKIPPED_TRANSACTOR_SHARE * len(
-                        transactor_ids_list
-                    ):
-                        raise DownloadError(
-                            f"{skipped} of {len(transactor_ids_list)}"
-                            f" {transactor_type} ids could not be fetched (more"
-                            f" than {MAX_SKIPPED_TRANSACTOR_SHARE:.0%}), so"
-                            f" {output_file.name} was not replaced"
-                        )
                     if not self.save_in_batches:
                         self._save_batch_data(results, write_path)
                 except BaseException:
@@ -974,6 +979,29 @@ class ArizonaDataProcessor:
                 )
 
         return all_transactor_data
+
+    def _check_skipped_share(self, skipped: int, requested: int, kind: str) -> None:
+        """Fail the run once too many of a type's ids have been skipped
+
+        Args:
+            skipped: Ids the server rejected so far.
+            requested: Ids asked for in total.
+            kind: The transactor type, for the message.
+
+        Raises:
+            DownloadError: if skipped is more than MAX_SKIPPED_TRANSACTOR_SHARE
+                of requested.
+        """
+        if skipped > MAX_SKIPPED_TRANSACTOR_SHARE * requested:
+            kept = (
+                f", so {kind}.csv was not replaced"
+                if self.override_existing_data
+                else ""
+            )
+            raise DownloadError(
+                f"{skipped} of {requested} {kind} ids could not be fetched (more"
+                f" than {MAX_SKIPPED_TRANSACTOR_SHARE:.0%}){kept}"
+            )
 
     def _fetch_transactors(
         self,
