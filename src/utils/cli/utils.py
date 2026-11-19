@@ -260,7 +260,8 @@ def add_argument_to_parser(
             "--database-path",
             type=Path,
             default=None,
-            help="Path to DuckDB database to load/save data",
+            help="Path to DuckDB database to load/save data. Defaults to"
+            " campaign_finance.duckdb in the output directory.",
         )
     elif argument_name == "model-path":
         parser.add_argument(
@@ -348,7 +349,9 @@ def add_argument_to_parser(
             "--overwrite",
             action="store_true",
             default=False,
-            help="Overwrite existing database and tables",
+            help="Drop every table in the database first, including the history"
+            " of earlier linkage runs. Without it, only the source tables are"
+            " reloaded from the cleaned data.",
         )
     elif argument_name == "resume-from-checkpoint":
         parser.add_argument(
