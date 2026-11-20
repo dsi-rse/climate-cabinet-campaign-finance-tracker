@@ -514,6 +514,29 @@ def test_unreadable_booleans_become_null_with_a_warning():
     assert cleaned["win"].isna().all()
 
 
+def test_impossible_dates_become_null_with_a_warning():
+    """A date outside what a timestamp can hold doesn't stop the state
+
+    Pennsylvania's 2024 file has a contribution dated 24201018 (year 2420).
+    """
+    import datetime
+
+    schema = DataSchema(DEFAULT_SCHEMA_PATH).schema["Transaction"]
+    transactions = pd.DataFrame(
+        {
+            "amount": [1.0, 2.0, 3.0],
+            "donor_id": ["d1", "d2", "d3"],
+            "recipient_id": ["r1", "r2", "r3"],
+            "date": [datetime.date(2024, 10, 18), datetime.date(2420, 10, 18), None],
+        }
+    )
+    with pytest.warns(UserWarning, match="1 values in 'date'.*2420-10-18"):
+        cleaned = clean_table_columns(transactions, schema)
+    assert str(cleaned["date"].dtype) == "datetime64[ns]"
+    assert cleaned["date"].tolist()[0] == pd.Timestamp("2024-10-18")
+    assert cleaned["date"].isna().tolist() == [False, True, True]
+
+
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
