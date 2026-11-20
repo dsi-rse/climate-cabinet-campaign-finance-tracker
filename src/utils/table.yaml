@@ -137,6 +137,12 @@ Transaction:
     - reported_state
     - affected_party_id
     - influence_type
+    # which party filed the report this row comes from: "recipient" for a
+    # contribution the receiving committee reported, "donor" for a payment or
+    # contribution the paying committee reported. Money that moves between
+    # two filers is reported by both, so it appears twice, once each way;
+    # linkage's Transaction_deduplicated view keeps the recipient's copy
+    - reported_by
     # where the row came from: the state's own id for the row (only mapped
     # where the state gives one that is unique per row: TX and the AZ Access
     # export), the raw file relative to the state's data directory, and the
@@ -165,6 +171,9 @@ Transaction:
       - positive
       - negative
       - neutral
+    reported_by:
+      - donor
+      - recipient
   types:
     # Float32 kept only 7 digits ($12,345,678.91 became $12,345,679). This is
     # Float64 rounded to cents in pandas and DECIMAL(18,2) in DuckDB

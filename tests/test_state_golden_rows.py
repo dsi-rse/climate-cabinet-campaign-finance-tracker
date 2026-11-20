@@ -62,6 +62,40 @@ def assert_row(row: pd.Series, expected: dict) -> None:
     assert actual == expected
 
 
+# ---- reported_by: which party filed the row ----
+
+
+@pytest.mark.parametrize(
+    ("state", "form", "expected"),
+    [
+        ("pa", "contributions", "recipient"),
+        ("pa", "expense", "donor"),
+        ("mi", "legacy_download_contributions_or_receipts", "recipient"),
+        ("mi", "legacy_download_expenditures", "donor"),
+        ("tx", "contributions", "recipient"),
+        ("tx", "expenditures", "donor"),
+        ("mn", "contributions", "recipient"),
+        ("mn", "expenditures", "donor"),
+        ("mn", "independent_expenditures", "donor"),
+    ],
+)
+def test_reported_by_is_the_party_that_filed(state, form, expected):
+    """A contribution file is the recipient's report; an expenditure file the payer's"""
+    table = standardize(state, form)
+    assert set(table["reported_by"]) == {expected}
+
+
+def test_az_reported_by_follows_the_direction_of_each_row(
+    az_advanced_search, az_access_export
+):
+    """Arizona files mix income and payments; reversed rows are the payer's report"""
+    assert only_row(az_advanced_search, "amount", 150.0)["reported_by"] == "recipient"
+    assert only_row(az_advanced_search, "amount", 250.0)["reported_by"] == "donor"
+    by_type = az_access_export.groupby("transaction_type")["reported_by"].agg(set)
+    assert by_type["contribution"] == {"recipient"}
+    assert by_type["expense"] == {"donor"}
+
+
 # ---- Arizona ----
 
 
@@ -309,6 +343,63 @@ def test_tx_contribution_is_dated_when_given_not_when_reported():
             "date": "2008-12-20",
         },
     )
+
+
+def test_tx_superseded_report_rows_are_dropped(tmp_path):
+    """infoOnlyFlag Y marks rows a corrected report replaced; only N rows are kept
+
+    The expenditures form inherits the filter from contributions.
+    """
+    generator = load_fixture_generator("make_az_mi_tx_fixtures")
+    shared = {
+        "formTypeCd": "MPAC",
+        "filerIdent": "00090001",
+        "filerTypeCd": "MPAC",
+        "filerName": "Example Industry PAC",
+    }
+    generator.write(
+        tmp_path / "contribs_01.csv",
+        generator.TX_CONTRIBUTIONS,
+        [
+            {
+                **shared,
+                "infoOnlyFlag": flag,
+                "reportInfoIdent": str(500 + i),
+                "contributionInfoId": str(700 + i),
+                "contributionDt": "20240101",
+                "contributionAmount": amount,
+                "contributorPersentTypeCd": "INDIVIDUAL",
+                "contributorNameLast": "Testperson",
+            }
+            for i, (flag, amount) in enumerate(
+                [("N", "100.00"), ("Y", "250.00"), ("N", "300.00")]
+            )
+        ],
+    )
+    generator.write(
+        tmp_path / "expend_01.csv",
+        generator.TX_EXPENDITURES,
+        [
+            {
+                **shared,
+                "infoOnlyFlag": flag,
+                "reportInfoIdent": str(600 + i),
+                "expendInfoId": str(800 + i),
+                "expendDt": "20240101",
+                "expendAmount": amount,
+                "expendCatCd": "UNKNOWN",
+                "payeePersentTypeCd": "ENTITY",
+                "payeeNameOrganization": "Sample Vendor",
+            }
+            for i, (flag, amount) in enumerate([("Y", "500.00"), ("N", "600.00")])
+        ],
+    )
+
+    contributions = standardize("tx", "contributions", state_data_directory=tmp_path)
+    expenditures = standardize("tx", "expenditures", state_data_directory=tmp_path)
+
+    assert sorted(contributions["amount"]) == [100.0, 300.0]
+    assert expenditures["amount"].tolist() == [600.0]
 
 
 def test_tx_contribution_files_numbered_past_99_are_read():

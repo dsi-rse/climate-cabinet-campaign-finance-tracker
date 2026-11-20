@@ -31,6 +31,8 @@ base:
 contributions:
   inherits: base
   table_name: Transaction
+  # filed by the committee that received the money
+  reported_by: recipient
   column_details:
     - raw_name: CampaignFinanceID
       type: str
@@ -242,6 +244,13 @@ filer:
     - raw_name: AMMEND
       type: str
       notes: bool
+      # Y marks a filing that amends an earlier one. The export almost always
+      # holds only the current version of each filing: in the 2024 file (read
+      # as pandas reads it), 1,192 of 12,968 filings are amendments, and only 9
+      # filer-year-cycle groups hold both an original and an amendment. Their
+      # 3,280 contribution rows ($529K, 0.3% of the file) are the only amended
+      # rows counted twice, so there is no filter; dropping them would need the
+      # filer file's AMMEND flag while reading the contribution file.
 
     - raw_name: TERMINATE
       type: str
@@ -347,6 +356,8 @@ filer_2002:
 expense:
   inherits: base
   table_name: Transaction
+  # filed by the committee that paid
+  reported_by: donor
   path_pattern: "(?i)^((?!2002)\\d{4})/expense.*\\.txt$"
   column_details:
     - raw_name: CampaignFinanceID

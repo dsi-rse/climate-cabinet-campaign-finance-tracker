@@ -7,6 +7,10 @@ from yaml import safe_load
 
 from utils.constants import STATE_FINANCE_CONFIG_DIRECTORY
 
+# Values of a Transaction form's reported_by: the party whose report the rows
+# come from (see table.yaml)
+REPORTED_BY_VALUES = ("donor", "recipient")
+
 
 def resolve_inheritance(config: dict, form_code: str) -> dict:
     """Recursively resolves inheritance from parent form_configs
@@ -127,6 +131,17 @@ class ConfigHandler:
         return self._state_code_columns
 
     @property
+    def reported_by(self) -> str | None:
+        """Which party filed the rows of this form: "donor", "recipient" or None
+
+        Set on Transaction forms. A contribution file is filed by the committee
+        that received the money ("recipient"); an expenditure file by the one
+        that paid it ("donor"). Rows that transaction_direction reverses get the
+        other value. None leaves the column empty.
+        """
+        return self._reported_by
+
+    @property
     def enum_mapper(self) -> dict[dict[str, str]]:
         """Maps enum column names to mappings of raw values to standard values"""
         return self._enum_mapper
@@ -238,6 +253,12 @@ class ConfigHandler:
         self._duplicate_columns = form_config.get("duplicate_columns", {})
         self._new_empty_columns = form_config.get("new_empty_columns", [])
         self._state_code_columns = form_config.get("state_code_columns", [])
+        self._reported_by = form_config.get("reported_by")
+        if self._reported_by not in (None, *REPORTED_BY_VALUES):
+            raise ValueError(
+                f"{form_code}: reported_by must be one of {REPORTED_BY_VALUES},"
+                f" not {self._reported_by!r}"
+            )
         self._state_code = form_config.get("state_code", state_code)
         self._table_name = form_config.get("table_name")
         self._raw_data_path_pattern = form_config.get("path_pattern")

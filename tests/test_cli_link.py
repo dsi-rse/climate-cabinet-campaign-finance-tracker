@@ -165,6 +165,28 @@ def test_a_state_with_no_cleaned_data_stops_the_run_before_dropping_anything(
     assert query(database_path, 'SELECT count(*) FROM "Transactor"') == [(before,)]
 
 
+def test_reported_by_reaches_the_database(data_directory):
+    """The column standardize sets survives normalize, clean and the load
+
+    Args:
+        data_directory: Data folder with cleaned TX and MN data.
+    """
+    link(data_directory)
+    database_path = data_directory / "linked" / DEFAULT_DATABASE_NAME
+    rows = query(
+        database_path,
+        'SELECT reported_state, reported_by, count(*) FROM "Transaction"'
+        " GROUP BY 1, 2 ORDER BY 1, 2",
+    )
+    by_state = {}
+    for state, reported_by, count in rows:
+        by_state.setdefault(state, {})[reported_by] = count
+    assert set(by_state) == {"mn", "tx"}
+    for counts in by_state.values():
+        assert set(counts) == {"donor", "recipient"}
+        assert all(count > 0 for count in counts.values())
+
+
 def test_only_the_requested_states_are_loaded(data_directory):
     """--states limits which cleaned folders go into the database
 

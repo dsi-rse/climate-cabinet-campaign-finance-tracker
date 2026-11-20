@@ -13,6 +13,17 @@ base:
 contributions:
   # numbered contribs_01 upward; past 99 since 2026 (contribs_100.csv)
   path_pattern: ^contribs_\d{2,}\.csv$
+  # infoOnlyFlag is "Superseded by other report" (CFS-ReadMe.txt in the bulk
+  # download): the rows of a report that a corrected report has replaced. The
+  # corrected report's rows are in the same files, so keeping both would count
+  # those contributions twice. Only current rows are kept. 11% of the rows in
+  # contribs_01.csv and 6% of cover sheets were superseded (2026-11 download).
+  # The expenditures form inherits this filter.
+  filter:
+    infoOnlyFlag:
+      - "N"
+  # filed by the committee that received the money
+  reported_by: recipient
   duplicate_columns:
     recipient--transactor_type:
       - recipient--transactor_type_specific
@@ -226,6 +237,8 @@ expenditures:
   inherits: contributions
   table_name: Transaction
   path_pattern: ^expend_\d{2,}\.csv$
+  # filed by the committee that paid
+  reported_by: donor
   duplicate_columns:
     donor--transactor_type_specific:
       - donor--transactor_type

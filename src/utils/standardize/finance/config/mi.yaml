@@ -13,6 +13,8 @@ base:
 legacy_download_contributions_or_receipts:
   inherits: base
   table_name: Transaction
+  # filed by the committee that received the money
+  reported_by: recipient
   path_pattern: "^LegacyDownloads/(\\d{4})/(\\d{4})_mi_cfr_(contributions|receipts).*\\.csv$"
   
   enum_mapper:
@@ -64,6 +66,13 @@ legacy_download_contributions_or_receipts:
     - raw_name: "doc_type_desc"
       type: str
       description: "Document type description"
+      # Amended statements ("AMENDED JULY QUARTERLY CS", ...) sit next to the
+      # originals and are additive, not replacements: in the 2024
+      # contributions (both files, 1,298,334 rows), 372 of 437 amended
+      # statements had their original present, 302 of them were under half
+      # the original's size, and only 177 of their 13,712 rows repeated a row
+      # of the original (same name, amount and date). Both are kept; dropping
+      # originals would lose the bulk of those committees' rows.
     - raw_name: "com_legal_name"
       type: str
       standard_name: recipient--full_name
@@ -150,6 +159,8 @@ legacy_download_expenditures:
   inherits: base
   table_name: Transaction
   path_pattern: "^LegacyDownloads/(\\d{4})/(\\d{4})_mi_cfr_expenditures.*\\.csv$"
+  # filed by the committee that paid
+  reported_by: donor
 
   enum_mapper:
     donor--transactor_type: *committee_transactor_type
