@@ -309,7 +309,10 @@ def create_deduplicated_transaction_view(con: duckdb.DuckDBPyConnection) -> None
     view can undercount in that rare case.
 
     Nothing is created if there is no Transaction table or it lacks the
-    columns needed (reported_by, donor_id, recipient_id, amount, date).
+    columns needed (reported_by, donor_id, recipient_id, amount, date). The
+    loader adds schema columns a cleaned file lacks as NULL, so cleaned data
+    from before reported_by existed gets the view with nothing removed; a
+    message says so.
 
     Args:
         con: DuckDB connection with the canonical views.
@@ -326,6 +329,15 @@ def create_deduplicated_transaction_view(con: duckdb.DuckDBPyConnection) -> None
             f" {', '.join(sorted(set(_DEDUPLICATION_COLUMNS) - columns))}"
         )
         return
+    (with_reporter, rows) = con.execute(
+        'SELECT count(reported_by), count(*) FROM "Transaction"'
+    ).fetchone()
+    if rows and not with_reporter:
+        print(
+            f"{DEDUPLICATED_VIEW} removes nothing: reported_by is empty on every"
+            " Transaction row. Re-run standardize, normalize and clean so the"
+            " column is filled."
+        )
     same_state = (
         "AND r.reported_state IS NOT DISTINCT FROM t.reported_state"
         if "reported_state" in columns

@@ -493,6 +493,23 @@ def test_deduplicated_view_needs_reported_by(tmp_path, database_path, model_path
     assert "Transaction_deduplicated" not in names
 
 
+def test_deduplicated_view_removes_nothing_when_reported_by_is_empty(
+    database_path, model_path, capsys
+):
+    """Cleaned data from before the column existed loads as NULL; nothing is dropped"""
+    con = connect_duckdb(database_path)
+    con.execute('UPDATE "Transaction" SET reported_by = NULL')
+    con.close()
+    run_linkage(database_path, model_path)
+    counts = read(
+        database_path,
+        'SELECT (SELECT count(*) FROM "Transaction_canonical") AS c,'
+        ' (SELECT count(*) FROM "Transaction_deduplicated") AS d',
+    ).iloc[0]
+    assert counts["c"] == counts["d"] == TRANSACTOR_COUNT + len(TRANSFERS)
+    assert "removes nothing: reported_by is empty" in capsys.readouterr().out
+
+
 def test_failed_run_records_nothing(database_path, model_path):
     """A failure while recording leaves no partial run behind
 

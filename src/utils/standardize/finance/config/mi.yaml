@@ -67,11 +67,12 @@ legacy_download_contributions_or_receipts:
       type: str
       description: "Document type description"
       # Amended statements ("AMENDED JULY QUARTERLY CS", ...) sit next to the
-      # originals and are additive, not replacements: in the 2024 download,
-      # 203 amended statements had their original present, 166 of them were
-      # under half the original's size, and only 165 of their 7,711 rows
-      # repeated a row of the original (same name, amount and date). Both are
-      # kept; dropping originals would lose the bulk of those committees' rows.
+      # originals and are additive, not replacements: in the 2024
+      # contributions (both files, 1,298,334 rows), 372 of 437 amended
+      # statements had their original present, 302 of them were under half
+      # the original's size, and only 177 of their 13,712 rows repeated a row
+      # of the original (same name, amount and date). Both are kept; dropping
+      # originals would lose the bulk of those committees' rows.
     - raw_name: "com_legal_name"
       type: str
       standard_name: recipient--full_name

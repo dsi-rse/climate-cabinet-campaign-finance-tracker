@@ -766,8 +766,9 @@ mdb_transactions:
       # Equal to TransactionID for most rows. Where it differs it links a row
       # to the one it adjusts, not a correction that replaces it: of 73,925
       # such links in the 2025-04-15 export, 86% negate the original's amount,
-      # most often "Pay a Bill" (75) against "Purchase on Terms/Credit" (32)
-      # or a refund against the contribution refunded. Both rows are kept as
+      # most often "Pay a Bill" (75) against "Purchase on Terms/Credit" (32):
+      # 26,292 pairs, $22.6M of payments against $41.0M of purchases, or a
+      # refund against the contribution refunded. Both rows are kept as
       # separate movements of money. Whether a bill and its payment should
       # count once is an open accounting question (see the issue on Arizona
       # double counting). Deleted is 0 for every row, so nothing is filtered.
