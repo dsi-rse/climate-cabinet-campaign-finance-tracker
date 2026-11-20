@@ -255,6 +255,44 @@ def test_an_organization_word_in_the_last_name_alone_is_enough():
     assert table["transactor_type_inferred"].tolist() == [True, False]
 
 
+def test_a_supplied_first_name_makes_an_untyped_row_an_individual():
+    """Michigan gives donors a first name and no type; organization words still win"""
+    table = fill_in_transactor_types(
+        pd.DataFrame(
+            {
+                "full_name": ["BEREZNICKI", "Acme Inc", "IOSCO COUNTY"],
+                "first_name": ["NANCY", "Pat", None],
+                "last_name": None,
+                "transactor_type": pd.Series([None, None, None], dtype=object),
+            }
+        )
+    )
+    assert table["transactor_type"].tolist() == [
+        "Individual",
+        "Organization",
+        "Unknown",
+    ]
+    assert table["transactor_type_inferred"].tolist() == [True, True, False]
+
+
+def test_a_one_word_full_name_beside_a_first_name_is_the_last_name():
+    """Michigan's l_name_or_org holds a person's last name; nothing else changes"""
+    table = clean_individuals_names(
+        names_table(
+            [
+                {"full_name": "BEREZNICKI ", "first_name": "NANCY"},
+                {"full_name": "Mary Ann Smith", "first_name": "Mary Ann"},
+                {"full_name": "Jones", "first_name": "Ann", "last_name": "Given"},
+            ]
+        )
+    )
+    assert name_parts(table, ["first_name", "last_name"]) == [
+        {"first_name": "NANCY", "last_name": "BEREZNICKI"},
+        {"first_name": "Mary Ann", "last_name": "Smith"},
+        {"first_name": "Ann", "last_name": "Given"},
+    ]
+
+
 NAME_COLUMNS = [
     "full_name",
     "first_name",
