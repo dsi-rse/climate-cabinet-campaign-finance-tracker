@@ -48,6 +48,15 @@ TRANSFERS = pd.DataFrame(
         # same parties and amount, but reported in another state: both kept
         ("o1", "committee", 650.0, "2024-01-10", "tx", "donor"),
         ("o2", "committee", 650.0, "2024-01-10", "mn", "recipient"),
+        # exactly the window apart: one transfer; one day more: two
+        ("o1", "committee", 310.0, "2024-04-01", "tx", "donor"),
+        ("o2", "committee", 310.0, "2024-04-08", "tx", "recipient"),
+        ("o1", "committee", 320.0, "2024-05-01", "tx", "donor"),
+        ("o2", "committee", 320.0, "2024-05-09", "tx", "recipient"),
+        # same amount and day as the first transfer, but to another recipient
+        # or from another payer (o6 is a different organization): both kept
+        ("o1", "other_committee", 500.0, "2024-01-11", "tx", "donor"),
+        ("o6", "committee", 500.0, "2024-01-11", "tx", "donor"),
     ],
     columns=[
         "donor_id",
@@ -443,37 +452,56 @@ def test_transfers_reported_by_both_filers_are_counted_once(database_path, model
 
     o1 and o2 are the same organization (linked by name), so the payer's
     500 (from o1) and the recipient's 500 (from o2, two days later) are one
-    transfer. The 777 has no recipient copy, the 900s are a month apart and
-    the 650s are in different states, so those stay.
+    transfer, as are the 310s exactly seven days apart. The 777 has no
+    recipient copy, the 320s are eight days apart, the 900s a month apart,
+    the 650s are in different states, and the other 500s are to another
+    recipient or from another payer, so those stay.
     """
     run_linkage(database_path, model_path)
     source = read(database_path, 'SELECT count(*) AS n FROM "Transaction"')["n"][0]
     kept = read(
         database_path,
-        'SELECT amount, reported_by FROM "Transaction_deduplicated"'
-        " WHERE amount <> 10 ORDER BY amount, reported_by",
+        'SELECT amount, reported_by, recipient_id FROM "Transaction_deduplicated"'
+        " WHERE amount <> 10 ORDER BY amount, reported_by, recipient_id",
     )
     assert source == TRANSACTOR_COUNT + len(TRANSFERS)
     assert (
         read(database_path, 'SELECT count(*) AS n FROM "Transaction_deduplicated"')[
             "n"
         ][0]
-        == source - 1
+        == source - 2
     )
     assert kept.to_records(index=False).tolist() == [
-        (500.0, "recipient"),
-        (650.0, "donor"),
-        (650.0, "recipient"),
-        (777.0, "donor"),
-        (900.0, "donor"),
-        (900.0, "recipient"),
+        (310.0, "recipient", "committee"),
+        (320.0, "donor", "committee"),
+        (320.0, "recipient", "committee"),
+        (500.0, "donor", "committee"),  # from o6
+        (500.0, "donor", "other_committee"),
+        (500.0, "recipient", "committee"),
+        (650.0, "donor", "committee"),
+        (650.0, "recipient", "committee"),
+        (777.0, "donor", "committee"),
+        (900.0, "donor", "committee"),
+        (900.0, "recipient", "committee"),
     ]
-    # the kept copy carries the canonical donor id
+    # the kept recipient copy carries the canonical donor id; the kept
+    # payer copy to the committee is o6's, which isn't o1
     donors = read(
         database_path,
-        'SELECT DISTINCT donor_id FROM "Transaction_deduplicated" WHERE amount = 500',
+        'SELECT reported_by, donor_id FROM "Transaction_deduplicated"'
+        " WHERE amount = 500 AND recipient_id = 'committee' ORDER BY reported_by",
     )
-    assert donors["donor_id"].tolist() == ["o1"]
+    assert donors.to_records(index=False).tolist() == [
+        ("donor", "o6"),
+        ("recipient", "o1"),
+    ]
+    # it is a table, so queries don't redo the match
+    kinds = read(
+        database_path,
+        "SELECT table_type FROM information_schema.tables"
+        " WHERE table_name = 'Transaction_deduplicated'",
+    )
+    assert kinds["table_type"].tolist() == ["BASE TABLE"]
 
 
 def test_deduplicated_view_needs_reported_by(tmp_path, database_path, model_path):
@@ -496,9 +524,15 @@ def test_deduplicated_view_needs_reported_by(tmp_path, database_path, model_path
 def test_deduplicated_view_removes_nothing_when_reported_by_is_empty(
     database_path, model_path, capsys
 ):
-    """Cleaned data from before the column existed loads as NULL; nothing is dropped"""
+    """Cleaned data from before the column existed loads as NULL; nothing is dropped
+
+    The message names each state with such rows, since states can be at
+    different stages.
+    """
     con = connect_duckdb(database_path)
-    con.execute('UPDATE "Transaction" SET reported_by = NULL')
+    con.execute(
+        "UPDATE \"Transaction\" SET reported_by = NULL WHERE reported_state = 'tx'"
+    )
     con.close()
     run_linkage(database_path, model_path)
     counts = read(
@@ -507,7 +541,10 @@ def test_deduplicated_view_removes_nothing_when_reported_by_is_empty(
         ' (SELECT count(*) FROM "Transaction_deduplicated") AS d',
     ).iloc[0]
     assert counts["c"] == counts["d"] == TRANSACTOR_COUNT + len(TRANSFERS)
-    assert "removes nothing: reported_by is empty" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert f"{TRANSACTOR_COUNT + len(TRANSFERS) - 1:,} of" in out
+    assert "Transaction rows for tx have no reported_by" in out
+    assert "for mn" not in out
 
 
 def test_failed_run_records_nothing(database_path, model_path):

@@ -89,7 +89,9 @@ Both first level keys have the same set of subkeys:
   - map of column names to list of values that should be replaced with null.
   - For example, states sometimes have 0 amount transactions that should be null.
 - `filter`:
-  - map of standard column names to 'NOT' key that maps to all the values of that column that should not be included in returned dataframe. This is required as sometimes unfiltered data will double count filer to filer transactions (ex: filer A makes a contribution to filer B. A reports it in expenses and B reports it in contributions). 
+  - map of raw column names to either a list of the values to keep, or a `NOT` key mapping to a list of the values to drop. Use it for rows the state marks as superseded (Texas keeps only `infoOnlyFlag: ["N"]`), not for the payer's copy of a transfer between filers: linkage pairs those copies through `reported_by` and `Transaction_deduplicated` (Minnesota's `Type: NOT: [Contribution]` predates that and is kept for now).
+- `reported_by`:
+  - `recipient` or `donor`: which party filed the rows of a Transaction form. Contribution files are the recipient's report; expenditure files the payer's. Rows that `transaction_direction` reverses switch it automatically. Any other value raises `ValueError` when the config loads.
 - `path_pattern`: regex describing the default location of default raw files of this type. Relative to `${DATA_DIR}/${state_code}` directory. 
 
 #### Standard Column Naming
