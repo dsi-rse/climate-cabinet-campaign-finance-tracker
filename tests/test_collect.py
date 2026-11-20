@@ -227,6 +227,48 @@ def test_override_replaces_existing_files_without_duplicates(tmp_path):
     assert not list(tmp_path.glob(".*"))
 
 
+def test_rows_outside_the_requested_dates_are_dropped(tmp_path, capsys):
+    """The server ignores the date range for some categories; the collector doesn't"""
+
+    def search_date(day: str) -> str:
+        epoch_ms = int(pd.Timestamp(day, tz="UTC").timestamp() * 1000)
+        return f"/Date({epoch_ms})/"
+
+    class DatedAPI(FakeArizonaAPI):
+        def fetch_transaction_data_page(self, start=0, length=1000, **kw):
+            self.calls.append({"start": start, "length": length, **kw})
+            if start:
+                return {"data": [], "recordsFiltered": 4}
+            return {
+                "data": [
+                    {"TransactionID": 1, "TransactionDate": search_date("2024-01-05")},
+                    {"TransactionID": 2, "TransactionDate": search_date("2023-12-31")},
+                    {"TransactionID": 3, "TransactionDate": search_date("2024-12-31")},
+                    {"TransactionID": 4, "TransactionDate": search_date("2025-01-01")},
+                    {"TransactionID": 5},
+                ],
+                "recordsFiltered": 5,
+            }
+
+    transactions = make_processor(tmp_path).process_transaction_data(
+        DatedAPI(0),
+        "BallotMeasures",
+        CYCLE_ID,
+        "130",
+        start_date_override="2024-01-01",
+        end_date_override="2024-12-31",
+    )
+    # in range, in range (last day), and the row with no date; the day before
+    # and the day after the range are dropped
+    assert transactions["TransactionID"].tolist() == [1, 3, 5]
+    assert (
+        "Dropped 2 BallotMeasures records dated outside 2024-01-01 to 2024-12-31"
+        in capsys.readouterr().out
+    )
+    saved = pd.read_csv(tmp_path / "BallotMeasures-130-43-20240101-20241231.csv")
+    assert saved["TransactionID"].tolist() == [1, 3, 5]
+
+
 def test_an_interrupted_run_keeps_the_previous_files(tmp_path):
     """Until a query finishes, the earlier run's files are not touched"""
     previous = tmp_path / "Income-130-43-20230101-20241231.csv"

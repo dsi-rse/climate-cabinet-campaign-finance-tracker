@@ -255,6 +255,44 @@ def test_an_organization_word_in_the_last_name_alone_is_enough():
     assert table["transactor_type_inferred"].tolist() == [True, False]
 
 
+def test_a_supplied_first_name_makes_an_untyped_row_an_individual():
+    """Michigan gives donors a first name and no type; organization words still win"""
+    table = fill_in_transactor_types(
+        pd.DataFrame(
+            {
+                "full_name": ["BEREZNICKI", "Acme Inc", "IOSCO COUNTY"],
+                "first_name": ["NANCY", "Pat", None],
+                "last_name": None,
+                "transactor_type": pd.Series([None, None, None], dtype=object),
+            }
+        )
+    )
+    assert table["transactor_type"].tolist() == [
+        "Individual",
+        "Organization",
+        "Unknown",
+    ]
+    assert table["transactor_type_inferred"].tolist() == [True, True, False]
+
+
+def test_a_one_word_full_name_beside_a_first_name_is_the_last_name():
+    """Michigan's l_name_or_org holds a person's last name; nothing else changes"""
+    table = clean_individuals_names(
+        names_table(
+            [
+                {"full_name": "BEREZNICKI ", "first_name": "NANCY"},
+                {"full_name": "Mary Ann Smith", "first_name": "Mary Ann"},
+                {"full_name": "Jones", "first_name": "Ann", "last_name": "Given"},
+            ]
+        )
+    )
+    assert name_parts(table, ["first_name", "last_name"]) == [
+        {"first_name": "NANCY", "last_name": "BEREZNICKI"},
+        {"first_name": "Mary Ann", "last_name": "Smith"},
+        {"first_name": "Ann", "last_name": "Given"},
+    ]
+
+
 NAME_COLUMNS = [
     "full_name",
     "first_name",
@@ -512,6 +550,29 @@ def test_unreadable_booleans_become_null_with_a_warning():
     with pytest.warns(UserWarning, match="1 values in 'win'.*'maybe'"):
         cleaned = clean_table_columns(results, schema)
     assert cleaned["win"].isna().all()
+
+
+def test_impossible_dates_become_null_with_a_warning():
+    """A date outside what a timestamp can hold doesn't stop the state
+
+    Pennsylvania's 2024 file has a contribution dated 24201018 (year 2420).
+    """
+    import datetime
+
+    schema = DataSchema(DEFAULT_SCHEMA_PATH).schema["Transaction"]
+    transactions = pd.DataFrame(
+        {
+            "amount": [1.0, 2.0, 3.0],
+            "donor_id": ["d1", "d2", "d3"],
+            "recipient_id": ["r1", "r2", "r3"],
+            "date": [datetime.date(2024, 10, 18), datetime.date(2420, 10, 18), None],
+        }
+    )
+    with pytest.warns(UserWarning, match="1 values in 'date'.*2420-10-18"):
+        cleaned = clean_table_columns(transactions, schema)
+    assert str(cleaned["date"].dtype) == "datetime64[ns]"
+    assert cleaned["date"].tolist()[0] == pd.Timestamp("2024-10-18")
+    assert cleaned["date"].isna().tolist() == [False, True, True]
 
 
 @pytest.mark.parametrize(

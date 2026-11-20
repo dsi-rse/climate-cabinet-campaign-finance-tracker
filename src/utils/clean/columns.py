@@ -49,6 +49,39 @@ def _to_boolean_column(values: pd.Series, column_name: str) -> pd.Series:
     return result
 
 
+def _to_datetime_column(values: pd.Series, column_name: str) -> pd.Series:
+    """Convert a column to datetime64[ns] without failing on an impossible date
+
+    astype raised OutOfBoundsDatetime for a date outside 1677-2262 (a
+    Pennsylvania contribution dated 24201018, year 2420), which stopped the
+    whole state. Such dates become null and are reported.
+
+    Args:
+        values: The column to convert: dates, timestamps or text.
+        column_name: Name of the column, used in the warning.
+
+    Returns:
+        The column as datetime64[ns]. Values that can't be a timestamp become
+        missing, and a warning lists how many there were, with examples.
+    """
+    result = pd.to_datetime(values, errors="coerce")
+    # to_datetime may parse into a coarser unit that holds the year 2420; the
+    # nanosecond range is what the schema's datetime64[ns] can store
+    out_of_range = result.notna() & (
+        (result < pd.Timestamp.min) | (result > pd.Timestamp.max)
+    )
+    result = result.mask(out_of_range, pd.NaT)
+    unreadable = values.notna().to_numpy() & result.isna().to_numpy()
+    if unreadable.any():
+        examples = values[unreadable].astype(str).unique()[:_MAX_LISTED_UNREADABLE]
+        warnings.warn(
+            f"{int(unreadable.sum())} values in {column_name!r} are not dates a"
+            f" timestamp can hold and became null: {list(examples)}",
+            stacklevel=3,
+        )
+    return result.astype("datetime64[ns]")
+
+
 def _to_decimal_column(
     values: pd.Series, column_name: str, precision: int, scale: int
 ) -> pd.Series:
@@ -92,8 +125,9 @@ def clean_table_columns(
 
     Returns:
         Cleaned dataframe with all columns present and in the correct type.
-        Columns of type "decimal(p,s)" are Float64 rounded to s places, and
-        columns of type "bool" are pandas' nullable "boolean".
+        Columns of type "decimal(p,s)" are Float64 rounded to s places,
+        columns of type "bool" are pandas' nullable "boolean", and dates a
+        datetime64 can't hold become null with a warning.
 
     Raises:
         ValueError: if a decimal column has a value too large for its type
@@ -110,6 +144,10 @@ def clean_table_columns(
             )
         elif column_type in _BOOLEAN_TYPES:
             table_data[column_name] = _to_boolean_column(
+                table_data[column_name], column_name
+            )
+        elif column_type.startswith("datetime64"):
+            table_data[column_name] = _to_datetime_column(
                 table_data[column_name], column_name
             )
         elif pd.api.types.is_integer_dtype(pd.api.types.pandas_dtype(column_type)):

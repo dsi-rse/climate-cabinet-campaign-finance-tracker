@@ -94,6 +94,35 @@ def test_training_sample_is_individuals_from_given_table(con):
     train.create_random_individuals_subset(con, "transactors", 10)
 
 
+def test_training_sample_includes_untyped_people_with_a_first_name(con):
+    """States that give donors no type leave them Unknown; a first name makes
+    them people for training. Untyped rows without a first name, and
+    organizations, stay out."""
+    con.execute(
+        """INSERT INTO transactors (id, transactor_type, first_name, last_name)
+        VALUES ('u1', 'Unknown', 'ann', 'smith'), ('u2', 'Unknown', NULL, 'acme inc'),
+               ('u3', NULL, 'bob', 'lee'), ('o1', 'Organization', 'cat', 'corp')"""
+    )
+    train.create_random_individuals_subset(con, "transactors", 1000)
+    sampled = {
+        row[0]
+        for row in con.execute(
+            f"SELECT id FROM {train.TRAINING_SAMPLE_TABLE} WHERE id IN ('u1','u2','u3','o1')"
+        ).fetchall()
+    }
+    assert sampled == {"u1", "u3"}
+
+
+def test_training_stops_clearly_when_there_is_nobody_to_train_on(con, tmp_path):
+    """An all-organization table raises before Splink divides by zero"""
+    con.execute(
+        "CREATE TABLE organizations AS SELECT * FROM transactors WHERE transactor_type = 'Organization'"
+    )
+    with pytest.raises(ValueError, match="Only 0 record.*are people.*Organization: "):
+        train.train_splink(con, "organizations", tmp_path / "model.json")
+    assert not (tmp_path / "model.json").exists()
+
+
 def test_training_sample_is_the_same_each_run(con):
     """The seeded sample picks the same individuals on every call
 

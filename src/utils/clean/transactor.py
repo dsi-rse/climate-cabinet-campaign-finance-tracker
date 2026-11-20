@@ -87,6 +87,8 @@ def clean_individuals_names(names: pd.DataFrame) -> pd.DataFrame:
     """Fill in missing name parts by parsing the full name
 
     Name parts the state supplied are never replaced:
+    - a one-word full_name beside a supplied first_name and no last_name is
+      taken as the last name
     - if both first_name and last_name are missing, every missing part
       (first, middle, last, prefix, suffix, preferred) is filled from the
       parsed full_name
@@ -104,6 +106,17 @@ def clean_individuals_names(names: pd.DataFrame) -> pd.DataFrame:
     names = names.copy()
     if names.empty:
         return names
+    # a one-word full name next to a supplied first name is the last name
+    # (Michigan's l_name_or_org column holds a person's last name)
+    one_word_last_names = (
+        names["first_name"].notna()
+        & names["last_name"].isna()
+        & names["full_name"].notna()
+        & ~names["full_name"].astype("string").str.strip().str.contains(" ", na=False)
+    )
+    names.loc[one_word_last_names, "last_name"] = names.loc[
+        one_word_last_names, "full_name"
+    ].str.strip()
     # handle misplaced last names
     likely_full_names = (
         names["full_name"].isna()
@@ -157,11 +170,13 @@ def fill_in_transactor_types(names: pd.DataFrame) -> pd.DataFrame:
 
     A type the state supplied is never changed. A missing type becomes
     "Organization" when full_name or last_name contains a word from
-    company_name_patterns, and "Unknown" otherwise.
+    company_name_patterns, "Individual" when the state gave a first name
+    and the name has no such word (Michigan gives donors a first name and no
+    type), and "Unknown" otherwise.
 
     Args:
         names: A dataframe with columns full_name, last_name and
-            transactor_type.
+            transactor_type, and first_name if the state supplies one.
 
     Returns:
         names with transactor_type filled in, and transactor_type_inferred
@@ -177,10 +192,17 @@ def fill_in_transactor_types(names: pd.DataFrame) -> pd.DataFrame:
         )
         .any(axis=1)
     )
-    inferred = missing_type & looks_like_organization
-    names.loc[inferred, "transactor_type"] = "Organization"
+    has_first_name = (
+        names["first_name"].notna()
+        if "first_name" in names.columns
+        else pd.Series(False, index=names.index)
+    )
+    organization = missing_type & looks_like_organization
+    individual = missing_type & ~looks_like_organization & has_first_name
+    names.loc[organization, "transactor_type"] = "Organization"
+    names.loc[individual, "transactor_type"] = "Individual"
     names["transactor_type"] = names["transactor_type"].fillna("Unknown")
-    names["transactor_type_inferred"] = inferred.to_numpy()
+    names["transactor_type_inferred"] = (organization | individual).to_numpy()
     return names
 
 
