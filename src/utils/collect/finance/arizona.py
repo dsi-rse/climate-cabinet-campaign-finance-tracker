@@ -13,6 +13,10 @@ Data notes:
 - Negative amounts (refunds, loan payments) are shown in parentheses.
 - Lobbyist spending is not distinguished, and spending by political organizations
   is sometimes listed as payments to vendors.
+- The search's StartDate and EndDate are ignored for BallotMeasures (a
+  one-week request returned 894,606 rows, the whole category), so the
+  collector drops rows dated outside the requested range itself, for every
+  category, and says how many it dropped. The server still sends them all.
 - The search's Position filter (Support or Oppose) only applies to independent
   expenditures; the other categories return the same rows whatever it is set
   to, and the rows themselves don't say which it was. Independent expenditures
@@ -770,6 +774,7 @@ class ArizonaDataProcessor:
             The records fetched by this call.
         """
         all_records = []
+        dropped_outside_dates = 0
         # batch_size is None when data is not saved in batches
         page_size = min(self.batch_size or MAX_PAGE_SIZE, MAX_PAGE_SIZE)
         progress_bar = None
@@ -783,6 +788,11 @@ class ArizonaDataProcessor:
                 break
 
             records = response_data["data"]
+            # the server ignores the dates for some categories (BallotMeasures)
+            records, outside = _within_dates(
+                records, query["StartDate"], query["EndDate"]
+            )
+            dropped_outside_dates += outside
             all_records.extend(records)
 
             # Save in batches if enabled
@@ -818,6 +828,12 @@ class ArizonaDataProcessor:
 
         if progress_bar:
             progress_bar.close()
+        if dropped_outside_dates:
+            print(
+                f"Dropped {dropped_outside_dates:,} {query['CategoryType']} records"
+                f" dated outside {query['StartDate']} to {query['EndDate']}; the"
+                " server ignored the date range"
+            )
 
         # Save final data if not saving in batches
         if not self.save_in_batches:
@@ -1163,6 +1179,47 @@ class ArizonaDataProcessor:
             ):
                 cycle_ids.append(cycle_info["id"])
         return cycle_ids
+
+
+def _within_dates(
+    records: list[dict], start_date: str, end_date: str
+) -> tuple[list[dict], int]:
+    """Keep the records whose TransactionDate is in the requested range
+
+    The search returns dates as "/Date(<milliseconds since 1970>)/". A record
+    with no readable date is kept, since the range can't be checked.
+
+    Args:
+        records: One page of records from the search.
+        start_date: First day to keep, YYYY-MM-DD.
+        end_date: Last day to keep, YYYY-MM-DD.
+
+    Returns:
+        The records in range, and how many were dropped.
+    """
+    first = datetime.date.fromisoformat(start_date)
+    last = datetime.date.fromisoformat(end_date)
+    kept = []
+    for record in records:
+        transaction_date = _parse_search_date(record.get("TransactionDate"))
+        if transaction_date is None or first <= transaction_date <= last:
+            kept.append(record)
+    return kept, len(records) - len(kept)
+
+
+def _parse_search_date(value: object) -> datetime.date | None:
+    """Read a search result's "/Date(1714028400000)/" as a date, or None"""
+    if not isinstance(value, str):
+        return None
+    digits = "".join(
+        character for character in value if character.isdigit() or character == "-"
+    )
+    try:
+        return datetime.datetime.fromtimestamp(
+            int(digits) / 1000, tz=datetime.timezone.utc
+        ).date()
+    except (ValueError, OverflowError, OSError):
+        return None
 
 
 def get_cycle_info_by_year(year: int, api: ArizonaAPI) -> dict[str, str] | None:
