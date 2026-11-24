@@ -12,6 +12,8 @@ contributions:
   inherits: base
   table_name: Transaction
   path_pattern: "^contributions_all.csv$"
+  # filed by the committee that received the money
+  reported_by: recipient
 
   duplicate_columns:
     donor--transactor_type:
@@ -185,6 +187,8 @@ expenditures:
   inherits: base
   table_name: Transaction
   path_pattern: "^expenditures_all.csv$"
+  # filed by the committee that paid (independent_expenditures inherits this)
+  reported_by: donor
   # Columns are read by header name: since 2026 the file leaves out Vendor
   # address 1 and 2, and older downloads still have them
   include_column_order: false

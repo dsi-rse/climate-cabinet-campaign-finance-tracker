@@ -398,6 +398,10 @@ advanced_search_transactions:
   inherits: base
   path_pattern: "^AdvancedSearch/(BallotMeasures|Income|Expenditures|IndependentExpenditures)-.*\\.csv$"
   table_name: Transaction
+  # each file lists the filing committee's transactions; the committee is the
+  # recipient unless transaction_direction reverses the row, which switches
+  # reported_by to donor as well
+  reported_by: recipient
   duplicate_columns:
     transaction_type:
       - transaction_direction
@@ -746,6 +750,8 @@ mdb:
 mdb_transactions:
   inherits: mdb
   table_name: Transaction
+  # rows are the filing committee's; reversed rows switch to donor
+  reported_by: recipient
   duplicate_columns:
     transaction_type:
       - transaction_direction
@@ -758,7 +764,15 @@ mdb_transactions:
 
     - raw_name: "ModifiesTransactionID"
       type: Int64
-      # TODO should we delete the modified transaction?
+      # Equal to TransactionID for most rows. Where it differs it links a row
+      # to the one it adjusts, not a correction that replaces it: of 73,925
+      # such links in the 2025-04-15 export, 86% negate the original's amount,
+      # most often "Pay a Bill" (75) against "Purchase on Terms/Credit" (32):
+      # 26,292 pairs, $22.6M of payments against $41.0M of purchases, or a
+      # refund against the contribution refunded. Both rows are kept as
+      # separate movements of money. Whether a bill and its payment should
+      # count once is an open accounting question (see the issue on Arizona
+      # double counting). Deleted is 0 for every row, so nothing is filtered.
 
     - raw_name: "TransactionTypeID"
       type: Int32

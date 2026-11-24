@@ -38,6 +38,7 @@ Add synthetic raw files for the state under `tests/data/standardize/raw/<state c
 ### Checks when standardizing
 
 - **Headers.** A form that reads columns by position (the default, `include_column_order: True`) has its `column_order` checked against each file before the file is read. With `header: 0`, the file's header must match `column_order`, ignoring case, spacing and a byte order mark. With `header: null`, the first row must have as many columns as `column_order` and must not be the header itself. Any other file raises `HeaderMismatchError`, which names the file and the columns that differ, so a state adding, dropping or reordering columns stops the run instead of putting values under the wrong names. Forms that read columns by header name (`include_column_order: False`) are not checked.
+- **Superseded rows and who filed.** If the state marks rows that a corrected report has replaced (Texas's `infoOnlyFlag`), drop them with the form's `filter` so they aren't counted twice, and say in the config what the marker means. Every Transaction form sets `reported_by`: `recipient` for a file the receiving committee filed (contributions), `donor` for one the paying committee filed (expenditures). Rows that `transaction_direction` reverses switch it automatically. Linkage uses it to count a transfer between two filers once (`Transaction_deduplicated`), so don't drop the payer's copy at standardize unless the state gives no other way to tell the two apart.
 - **Values that become null.** A raw value becomes null if it is missing from an `enum_mapper` mapping, doesn't fit its `date_format`, or isn't a number in a `post_load_float` column. Each file that has such values logs a warning with counts per column. `cft standardize` writes every distinct value, with its count, form and file, to `standardized/<state>/reports/coerced_values.csv`. Values mapped to null on purpose (a key with an empty value) and unmapped `transaction_direction` values are not reported. Check this report when adding a state or a mapping: most rows mean a mapping is missing a value.
 
 
@@ -88,7 +89,9 @@ Both first level keys have the same set of subkeys:
   - map of column names to list of values that should be replaced with null.
   - For example, states sometimes have 0 amount transactions that should be null.
 - `filter`:
-  - map of standard column names to 'NOT' key that maps to all the values of that column that should not be included in returned dataframe. This is required as sometimes unfiltered data will double count filer to filer transactions (ex: filer A makes a contribution to filer B. A reports it in expenses and B reports it in contributions). 
+  - map of raw column names to either a list of the values to keep, or a `NOT` key mapping to a list of the values to drop. Use it for rows the state marks as superseded (Texas keeps only `infoOnlyFlag: ["N"]`), not for the payer's copy of a transfer between filers: linkage pairs those copies through `reported_by` and `Transaction_deduplicated` (Minnesota's `Type: NOT: [Contribution]` predates that and is kept for now).
+- `reported_by`:
+  - `recipient` or `donor`: which party filed the rows of a Transaction form. Contribution files are the recipient's report; expenditure files the payer's. Rows that `transaction_direction` reverses switch it automatically. Any other value raises `ValueError` when the config loads.
 - `path_pattern`: regex describing the default location of default raw files of this type. Relative to `${DATA_DIR}/${state_code}` directory. 
 
 #### Standard Column Naming
