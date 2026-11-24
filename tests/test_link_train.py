@@ -94,23 +94,23 @@ def test_training_sample_is_individuals_from_given_table(con):
     train.create_random_individuals_subset(con, "transactors", 10)
 
 
-def test_training_sample_includes_untyped_people_with_a_first_name(con):
-    """States that give donors no type leave them Unknown; a first name makes
-    them people for training. Untyped rows without a first name, and
-    organizations, stay out."""
+def test_training_sample_takes_only_records_typed_individual(con):
+    """Link trusts the type clean settled on: an untyped record stays out
+    even with a first name, and so does an organization with one."""
     con.execute(
         """INSERT INTO transactors (id, transactor_type, first_name, last_name)
         VALUES ('u1', 'Unknown', 'ann', 'smith'), ('u2', 'Unknown', NULL, 'acme inc'),
-               ('u3', NULL, 'bob', 'lee'), ('o1', 'Organization', 'cat', 'corp')"""
+               ('u3', NULL, 'bob', 'lee'), ('o1', 'Organization', 'cat', 'corp'),
+               ('i1', 'Individual', NULL, 'lee')"""
     )
     train.create_random_individuals_subset(con, "transactors", 1000)
     sampled = {
         row[0]
         for row in con.execute(
-            f"SELECT id FROM {train.TRAINING_SAMPLE_TABLE} WHERE id IN ('u1','u2','u3','o1')"
+            f"SELECT id FROM {train.TRAINING_SAMPLE_TABLE} WHERE id IN ('u1','u2','u3','o1','i1')"
         ).fetchall()
     }
-    assert sampled == {"u1", "u3"}
+    assert sampled == {"i1"}
 
 
 def test_training_stops_clearly_when_there_is_nobody_to_train_on(con, tmp_path):

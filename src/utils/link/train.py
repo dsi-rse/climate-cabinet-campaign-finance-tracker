@@ -20,13 +20,10 @@ TRAINING_SAMPLE_TABLE = "random_subset"
 # Seed for the training sample and for estimating u, so training on the same
 # data gives the same model
 TRAINING_SEED = 42
-# Which records training samples: typed as a person, or untyped with a first
-# name (states that give no type for donors leave them Unknown after clean)
-PERSON_FILTER = (
-    "transactor_type = 'Individual'"
-    " OR (coalesce(transactor_type, 'Unknown') = 'Unknown'"
-    " AND first_name IS NOT NULL)"
-)
+# Which records training samples. Link trusts the type clean settled on: a
+# state that gives no type has it inferred there (see
+# utils.clean.transactor.fill_in_transactor_types), not here
+PERSON_FILTER = "transactor_type = 'Individual'"
 # Fewer records than this can't train a model; Splink divides by the number
 # of record pairs, so an empty sample ended in ZeroDivisionError
 MIN_TRAINING_RECORDS = 2
@@ -41,10 +38,8 @@ def create_random_individuals_subset(
 
     People are filtered before sampling so the subset has `size` rows
     whenever the table has at least that many. A record is a person when its
-    transactor_type is Individual, or when the state gave no type (clean
-    leaves it Unknown) and the record has a first name: Michigan's donors
-    arrive without a type, so 3.2 million of them were being left out and
-    the sample could be empty. Rows are picked by a hash of their id and
+    transactor_type is Individual (see PERSON_FILTER). Rows are picked by a
+    hash of their id and
     TRAINING_SEED (ties broken by a hash of the whole row), not by DuckDB's
     sampling: a seeded sample depends on the order rows are scanned in,
     which changes when the database is rebuilt or read with more threads.
@@ -74,8 +69,8 @@ def _check_enough_people_to_train(
     Raises:
         ValueError: if fewer than MIN_TRAINING_RECORDS rows are people (see
             PERSON_FILTER), naming the transactor_type counts so the cause
-            (types the state didn't give, or a filter that dropped them) is
-            visible.
+            (types the state didn't give and clean couldn't infer, or a
+            filter that dropped them) is visible.
     """
     people = con.execute(
         f"SELECT count(*) FROM {table_name} WHERE {PERSON_FILTER}"
@@ -92,8 +87,8 @@ def _check_enough_people_to_train(
     )
     raise ValueError(
         f"Only {people} record(s) in {table_name} are people (transactor_type"
-        f" Individual, or Unknown with a first name), so there is nothing to"
-        f" train the linkage model on. Records by type: {described or 'none'}."
+        f" Individual), so there is nothing to train the linkage model on."
+        f" Records by type: {described or 'none'}."
     )
 
 
