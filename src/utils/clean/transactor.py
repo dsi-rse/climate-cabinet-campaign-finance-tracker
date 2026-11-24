@@ -3,6 +3,7 @@
 import re
 
 import nameparser
+import numpy as np
 import pandas as pd
 
 from utils.normalize import combine_rows_sharing_an_id
@@ -31,6 +32,10 @@ company_name_patterns = [
     r"citizens for",
 ]
 _ORGANIZATION_NAME_REGEX = rf"\b(?:{'|'.join(company_name_patterns)})\b"
+
+# Titles and suffixes a state writes after a surname ("KOSKE MR.", "WRIGHT JR")
+_TITLE_WORDS = {"mr", "mrs", "ms", "miss", "dr", "rev", "hon"}
+_SUFFIX_WORDS = {"jr", "sr", "ii", "iii", "iv", "esq"}
 
 
 def _clean_name_components(
@@ -83,12 +88,52 @@ def divide_full_name_nameparser(full_name: str) -> dict[str, str | None]:
     return _clean_name_components(name_components)
 
 
+def _split_surname_field(
+    surname_field: str, first_name: str
+) -> dict[str, str | None] | None:
+    """Read a surname field as last name, trailing title and trailing suffix
+
+    Michigan's l_name_or_org holds a person's last name, sometimes followed
+    by a title or suffix and the state's " ^" marker: "OLDHAM ^",
+    "KOSKE MR.^", "WRIGHT JR", "MC LARTY". The name parser would read these
+    as whole names and take the last word as the surname.
+
+    Args:
+        surname_field: The field's value.
+        first_name: The first name supplied beside it.
+
+    Returns:
+        last_name, name_prefix and name_suffix (cleaned, missing ones None),
+        or None when the field holds the first name too, so it is a whole
+        name for the parser, or holds no last name.
+    """
+    if re.search(rf"\b{re.escape(first_name.strip())}\b", surname_field, re.I):
+        return None
+    words = re.sub(r"\s*\^\s*$", "", surname_field).split()
+    prefix = suffix = None
+    while len(words) > 1:
+        word = words[-1].rstrip(".,").lower()
+        if word in _TITLE_WORDS and prefix is None:
+            prefix = words.pop()
+        elif word in _SUFFIX_WORDS and suffix is None:
+            suffix = words.pop()
+        else:
+            break
+    components = _clean_name_components(
+        {"last_name": " ".join(words), "name_prefix": prefix, "name_suffix": suffix}
+    )
+    return components if components["last_name"] else None
+
+
 def clean_individuals_names(names: pd.DataFrame) -> pd.DataFrame:
     """Fill in missing name parts by parsing the full name
 
     Name parts the state supplied are never replaced:
-    - a one-word full_name beside a supplied first_name and no last_name is
-      taken as the last name
+    - a full_name beside a supplied first_name and no last_name is a surname
+      field (Michigan's l_name_or_org), unless it contains the first name:
+      the last name is the field without a trailing title, suffix or " ^"
+      marker, whatever its word count (see _split_surname_field), and the
+      title and suffix fill name_prefix and name_suffix if those are missing
     - if both first_name and last_name are missing, every missing part
       (first, middle, last, prefix, suffix, preferred) is filled from the
       parsed full_name
@@ -106,17 +151,32 @@ def clean_individuals_names(names: pd.DataFrame) -> pd.DataFrame:
     names = names.copy()
     if names.empty:
         return names
-    # a one-word full name next to a supplied first name is the last name
-    # (Michigan's l_name_or_org column holds a person's last name)
-    one_word_last_names = (
+    # a full name next to a supplied first name is a surname field
+    surname_fields = (
         names["first_name"].notna()
         & names["last_name"].isna()
         & names["full_name"].notna()
-        & ~names["full_name"].astype("string").str.strip().str.contains(" ", na=False)
-    )
-    names.loc[one_word_last_names, "last_name"] = names.loc[
-        one_word_last_names, "full_name"
-    ].str.strip()
+    ).to_numpy()
+    if surname_fields.any():
+        split = [
+            _split_surname_field(str(field), str(first))
+            for field, first in zip(
+                names["full_name"].to_numpy()[surname_fields],
+                names["first_name"].to_numpy()[surname_fields],
+                strict=True,
+            )
+        ]
+        # keep what the state supplied; only fill what was missing
+        for column in ("last_name", "name_prefix", "name_suffix"):
+            values = names[column].to_numpy(dtype=object).copy()
+            current = values[surname_fields]
+            parsed = np.array(
+                [parts[column] if parts else None for parts in split], dtype=object
+            )
+            missing = pd.isna(current)
+            current[missing] = parsed[missing]
+            values[surname_fields] = current
+            names[column] = values
     # handle misplaced last names
     likely_full_names = (
         names["full_name"].isna()

@@ -1,6 +1,7 @@
 import datetime
 import importlib
 import io
+import json
 import lzma
 import pkgutil
 from unittest import mock
@@ -163,6 +164,7 @@ def test_standardize_config_matches_collected_transaction_files(category):
         f"{category}-130-43.csv",
     ]:
         assert pattern.fullmatch(f"AdvancedSearch/{filename}")
+    assert not pattern.fullmatch("AdvancedSearch/_progress.json")
 
 
 def test_output_file_name_includes_date_range(tmp_path):
@@ -227,46 +229,106 @@ def test_override_replaces_existing_files_without_duplicates(tmp_path):
     assert not list(tmp_path.glob(".*"))
 
 
+def search_date(day: str) -> str:
+    """A date as the search writes it: /Date(milliseconds since the epoch)/"""
+    epoch_ms = int(pd.Timestamp(day, tz="UTC").timestamp() * 1000)
+    return f"/Date({epoch_ms})/"
+
+
+def dated_api(**kwargs) -> FakeArizonaAPI:
+    """250 transactions in pages of 100: ids 0-49 and 200-249 are dated in
+    2024, ids 50-199 in 2023, so the first page is partly out of a 2024 range,
+    the second page wholly, and the third not at all. Id 5 has no date.
+    """
+    api = FakeArizonaAPI(0, **kwargs)
+    api.records = [
+        {
+            "TransactionID": i,
+            "TransactionDate": search_date(
+                "2024-06-01" if i < 50 or i >= 200 else "2023-06-01"
+            ),
+        }
+        for i in range(250)
+    ]
+    del api.records[5]["TransactionDate"]
+    return api
+
+
+IN_RANGE_IDS = [*range(50), *range(200, 250)]
+
+
 def test_rows_outside_the_requested_dates_are_dropped(tmp_path, capsys):
-    """The server ignores the date range for some categories; the collector doesn't"""
-
-    def search_date(day: str) -> str:
-        epoch_ms = int(pd.Timestamp(day, tz="UTC").timestamp() * 1000)
-        return f"/Date({epoch_ms})/"
-
-    class DatedAPI(FakeArizonaAPI):
-        def fetch_transaction_data_page(self, start=0, length=1000, **kw):
-            self.calls.append({"start": start, "length": length, **kw})
-            if start:
-                return {"data": [], "recordsFiltered": 4}
-            return {
-                "data": [
-                    {"TransactionID": 1, "TransactionDate": search_date("2024-01-05")},
-                    {"TransactionID": 2, "TransactionDate": search_date("2023-12-31")},
-                    {"TransactionID": 3, "TransactionDate": search_date("2024-12-31")},
-                    {"TransactionID": 4, "TransactionDate": search_date("2025-01-01")},
-                    {"TransactionID": 5},
-                ],
-                "recordsFiltered": 5,
-            }
-
-    transactions = make_processor(tmp_path).process_transaction_data(
-        DatedAPI(0),
+    """The server ignores the date range for some categories; the collector
+    doesn't, and still asks for every page once
+    """
+    api = dated_api()
+    transactions = make_processor(
+        tmp_path, records_directory=tmp_path
+    ).process_transaction_data(
+        api,
         "BallotMeasures",
         CYCLE_ID,
         "130",
         start_date_override="2024-01-01",
         end_date_override="2024-12-31",
     )
-    # in range, in range (last day), and the row with no date; the day before
-    # and the day after the range are dropped
-    assert transactions["TransactionID"].tolist() == [1, 3, 5]
+    # the row with no date is kept, since its date can't be checked
+    assert transactions["TransactionID"].tolist() == IN_RANGE_IDS
+    assert [call["start"] for call in api.calls] == [0, 100, 200]
     assert (
-        "Dropped 2 BallotMeasures records dated outside 2024-01-01 to 2024-12-31"
+        "Dropped 150 BallotMeasures records dated outside 2024-01-01 to 2024-12-31"
         in capsys.readouterr().out
     )
     saved = pd.read_csv(tmp_path / "BallotMeasures-130-43-20240101-20241231.csv")
-    assert saved["TransactionID"].tolist() == [1, 3, 5]
+    assert saved["TransactionID"].tolist() == IN_RANGE_IDS
+    (record,) = read_download_records(tmp_path)
+    assert (record["records"], record["dropped_outside_dates"]) == (100, 150)
+
+
+def test_resume_continues_at_the_server_offset_after_dropped_rows(tmp_path):
+    """After an interrupted run, the next run starts at the server offset the
+    first one reached, not at the number of rows it kept
+    """
+    with pytest.raises(DownloadError):
+        make_processor(tmp_path, page_retries=0).process_transaction_data(
+            dated_api(fail_from=200),
+            "BallotMeasures",
+            CYCLE_ID,
+            "130",
+            start_date_override="2024-01-01",
+            end_date_override="2024-12-31",
+        )
+    saved = tmp_path / "BallotMeasures-130-43-20240101-20241231.csv"
+    assert pd.read_csv(saved)["TransactionID"].tolist() == list(range(50))
+
+    api = dated_api()
+    make_processor(tmp_path).process_transaction_data(
+        api,
+        "BallotMeasures",
+        CYCLE_ID,
+        "130",
+        start_date_override="2024-01-01",
+        end_date_override="2024-12-31",
+    )
+    assert [call["start"] for call in api.calls] == [200]
+    assert pd.read_csv(saved)["TransactionID"].tolist() == IN_RANGE_IDS
+
+
+def test_a_file_saved_before_offsets_were_recorded_resumes_at_its_row_count(
+    tmp_path,
+):
+    saved = tmp_path / "Income-130-43-20230101-20241231.csv"
+    pd.DataFrame({"TransactionID": range(40)}).to_csv(saved, index=False)
+    assert make_processor(tmp_path)._get_resume_position(saved) == 40
+
+
+def test_override_records_the_offset_under_the_final_file_name(tmp_path):
+    make_processor(tmp_path, override_existing_data=True).process_transaction_data(
+        FakeArizonaAPI(10), "Income", CYCLE_ID, "130"
+    )
+    assert json.loads((tmp_path / "_progress.json").read_text()) == {
+        "Income-130-43-20230101-20241231.csv": 10
+    }
 
 
 def test_an_interrupted_run_keeps_the_previous_files(tmp_path):

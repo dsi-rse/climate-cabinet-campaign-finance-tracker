@@ -68,7 +68,8 @@ def _check_enough_people_to_train(
 
     Args:
         con: duckdb connection.
-        table_name: Table training will run on (the sample, or the full table).
+        table_name: Table training will run on, before it is sampled, so the
+            counts describe the data rather than an empty sample.
 
     Raises:
         ValueError: if fewer than MIN_TRAINING_RECORDS rows are people (see
@@ -172,10 +173,11 @@ def train_splink(
             estimates from both EM sessions.
 
     Raises:
-        ValueError: if the table (or its sample) has fewer than
-            MIN_TRAINING_RECORDS people to train on. Splink would otherwise
-            fail with a division by zero deep in its probability estimate.
+        ValueError: if the table has fewer than MIN_TRAINING_RECORDS people to
+            train on. Splink would otherwise fail with a division by zero deep
+            in its probability estimate.
     """
+    _check_enough_people_to_train(con, table_name)
     # Sample dataset if it's too large for training to prevent disk space issues
     row_count = con.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
     if row_count > TRAINING_SAMPLE_SIZE:
@@ -188,7 +190,6 @@ def train_splink(
         print(f"Training will use sample table: {table_name}")
     else:
         print(f"Training on full dataset: {row_count:,} records")
-    _check_enough_people_to_train(con, table_name)
 
     checkpoint_exists = checkpoint_path and Path(checkpoint_path).exists()
 

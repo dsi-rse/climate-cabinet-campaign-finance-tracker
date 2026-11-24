@@ -193,6 +193,7 @@ base:
       "1": "Individual"  # Individual
       "2": "Organization"  # Legacy Names Claimed as Committees
       "3": "Organization"  # Business
+      "4": "Individual"  # Qualifying (Clean Elections $5 contributors)
       "6": "Organization"  # Names used by Committees
       "10": "Organization"  # Candidate (not participating in Clean Elections)
       "11": "Organization"  # Candidate (participating in Clean Elections)
@@ -225,7 +226,7 @@ base:
       "1": "Individual"  # Individual
       "2": "Committee"  # Legacy Names Claimed as Committees
       "3": "Company"  # Business
-      "4": "Other"  # Qualifying
+      "4": "Individual"  # Qualifying (Clean Elections $5 contributors)
       "6": "Committee"  # Names used by Committees
       "10": "Candidate Committee"  # Candidate (not participating in Clean Elections)
       "11": "Candidate Committee"  # Candidate (participating in Clean Elections)

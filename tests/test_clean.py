@@ -275,6 +275,33 @@ def test_a_supplied_first_name_makes_an_untyped_row_an_individual():
     assert table["transactor_type_inferred"].tolist() == [True, True, False]
 
 
+def test_a_surname_field_beside_a_first_name_is_read_as_a_surname():
+    """Michigan writes a title, suffix or " ^" marker after the last name"""
+    table = clean_individuals_names(
+        names_table(
+            [
+                {"full_name": "COBB ^", "first_name": "ANN"},
+                {"full_name": "KOSKE MR.^", "first_name": "PAUL"},
+                {"full_name": "WRIGHT JR", "first_name": "SAM"},
+                {"full_name": "MC LARTY", "first_name": "JO"},
+                {"full_name": "*BITTERMAN", "first_name": "LEE"},
+                {"full_name": "KOSKE MR.^", "first_name": "PAUL", "name_prefix": "Dr"},
+                {"full_name": " ^ ", "first_name": "KIM"},
+            ]
+        )
+    )
+    assert name_parts(table, ["last_name", "name_prefix", "name_suffix"]) == [
+        {"last_name": "COBB", "name_prefix": None, "name_suffix": None},
+        {"last_name": "KOSKE", "name_prefix": "MR", "name_suffix": None},
+        {"last_name": "WRIGHT", "name_prefix": None, "name_suffix": "JR"},
+        {"last_name": "MC LARTY", "name_prefix": None, "name_suffix": None},
+        {"last_name": "BITTERMAN", "name_prefix": None, "name_suffix": None},
+        # a supplied prefix is kept
+        {"last_name": "KOSKE", "name_prefix": "Dr", "name_suffix": None},
+        {"last_name": None, "name_prefix": None, "name_suffix": None},
+    ]
+
+
 def test_a_one_word_full_name_beside_a_first_name_is_the_last_name():
     """Michigan's l_name_or_org holds a person's last name; nothing else changes"""
     table = clean_individuals_names(

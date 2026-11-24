@@ -123,6 +123,18 @@ def test_training_stops_clearly_when_there_is_nobody_to_train_on(con, tmp_path):
     assert not (tmp_path / "model.json").exists()
 
 
+def test_nobody_to_train_on_is_reported_for_the_table_not_the_sample(con, tmp_path):
+    """A sampled table's error names the data's types, not the empty sample's"""
+    con.execute(
+        "CREATE TABLE organizations AS SELECT * FROM transactors WHERE transactor_type = 'Organization'"
+    )
+    with patch.object(train, "TRAINING_SAMPLE_SIZE", 10):
+        with pytest.raises(
+            ValueError, match="in organizations are people.*Organization: "
+        ):
+            train.train_splink(con, "organizations", tmp_path / "model.json")
+
+
 def test_training_sample_is_the_same_each_run(con):
     """The seeded sample picks the same individuals on every call
 
