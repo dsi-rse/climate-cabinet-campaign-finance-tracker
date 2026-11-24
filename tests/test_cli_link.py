@@ -187,6 +187,32 @@ def test_reported_by_reaches_the_database(data_directory):
         assert all(count > 0 for count in counts.values())
 
 
+def test_reloading_drops_the_deduplicated_transactions(data_directory):
+    """The previous run's Transaction_deduplicated goes with the source tables
+
+    Linkage rebuilds it inside its transaction, so if the run fails after the
+    reload (Splink raising, say), a table left from the previous run would
+    hold that run's rows beside the new data. Dropping it with the tables it
+    is built from leaves none instead.
+
+    Args:
+        data_directory: Data folder with cleaned TX and MN data.
+    """
+    link(data_directory)
+    database_path = data_directory / "linked" / DEFAULT_DATABASE_NAME
+    con = connect_duckdb(database_path)
+    con.execute(
+        'CREATE TABLE "Transaction_deduplicated" AS SELECT * FROM "Transaction"'
+    )
+    con.close()
+    link(data_directory)
+    assert query(
+        database_path,
+        "SELECT count(*) FROM information_schema.tables"
+        " WHERE table_name = 'Transaction_deduplicated'",
+    ) == [(0,)]
+
+
 def test_only_the_requested_states_are_loaded(data_directory):
     """--states limits which cleaned folders go into the database
 

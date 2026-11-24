@@ -57,7 +57,7 @@ from pathlib import Path
 import duckdb
 from splink import DuckDBAPI, Linker
 
-from utils.database import connect_duckdb, table_exists
+from utils.database import DEDUPLICATED_TABLE, connect_duckdb, table_exists
 from utils.ids import get_all_id_references
 from utils.provenance import git_state, sha256_file, utc_now
 
@@ -69,9 +69,6 @@ LINKAGE_MAPPING_TABLE = "linkage_mapping"
 # where a linkage_mapping table written by the old in-place linkage is moved
 LINKAGE_MAPPING_LEGACY_TABLE = "linkage_mapping_legacy"
 CANONICAL_VIEW_SUFFIX = "_canonical"
-# Transaction_canonical with each filer-to-filer transfer counted once. A
-# table, written by each run, not a view: see create_deduplicated_transactions
-DEDUPLICATED_TABLE = "Transaction_deduplicated"
 # The two filers can report a transfer on different days (sent and received,
 # or the dates of their reporting periods); copies this many days apart match
 TRANSFER_DATE_WINDOW_DAYS = 7

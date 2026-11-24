@@ -201,6 +201,10 @@ def _parquet_select_list(
 
 
 DETAILED_VIEW_TABLE = "transactor_detailed_view"
+# Transaction_canonical with each filer-to-filer transfer counted once,
+# written by linkage (utils.link.predict). Derived from the source tables,
+# so it is dropped with them when the cleaned data is reloaded
+DEDUPLICATED_TABLE = "Transaction_deduplicated"
 # Tables the detailed view is built from. A state without one (TX has no
 # Membership rows) still gets an empty table, so the view can be built.
 DETAILED_VIEW_SOURCE_TABLES = ("Transactor", "Membership", "Address")
@@ -234,8 +238,11 @@ def create_database_from_nested_parquet_directories(
 
     The source tables (every table in the schema, and the detailed view
     table built from them) are dropped and reloaded, so the database always
-    matches the cleaned data. Other tables, such as the linkage run history,
-    are kept unless overwrite is True.
+    matches the cleaned data. Transaction_deduplicated, which linkage builds
+    from them, is dropped too, so a run that fails before rebuilding it
+    doesn't leave the previous run's table beside the new data. Other
+    tables, such as the linkage run history, are kept unless overwrite is
+    True.
 
     database_dir holds one folder per state, each with one parquet file per
     table. Example:
@@ -294,7 +301,10 @@ def create_database_from_nested_parquet_directories(
             " first."
         )
     con = duckdb.connect(str(database_path))
-    source_tables = set(_get_data_schema().schema) | {DETAILED_VIEW_TABLE}
+    source_tables = set(_get_data_schema().schema) | {
+        DETAILED_VIEW_TABLE,
+        DEDUPLICATED_TABLE,
+    }
     _drop_relations(con, None if overwrite else source_tables)
     failures = []
     for file in files:
