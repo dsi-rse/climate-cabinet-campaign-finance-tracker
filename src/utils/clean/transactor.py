@@ -122,7 +122,8 @@ def clean_individuals_names(names: pd.DataFrame) -> pd.DataFrame:
     Name parts the state supplied are never replaced:
     - a trailing title, suffix or " ^" marker is taken off a supplied
       last_name ("KOSKE MR.^", "WRIGHT JR") and fills name_prefix or
-      name_suffix if those are missing (see _peel_title_and_suffix)
+      name_suffix if those are missing (see _peel_title_and_suffix); a
+      last_name with no letters left becomes null
     - if both first_name and last_name are missing, every missing part
       (first, middle, last, prefix, suffix, preferred) is filled from the
       parsed full_name
@@ -164,8 +165,10 @@ def clean_individuals_names(names: pd.DataFrame) -> pd.DataFrame:
             current = values[has_last_name]
             parsed = np.array([parts[column] for parts in peeled], dtype=object)
             if column == "last_name":
-                # the peeled surname replaces the field it came from
-                current[:] = np.where(pd.isna(parsed), current, parsed)
+                # the peeled surname replaces the field it came from; a field
+                # with nothing else in it (" ", "^", digits) becomes null
+                # rather than an empty string that would match other empties
+                current[:] = parsed
             else:
                 missing = pd.isna(current)
                 current[missing] = parsed[missing]
@@ -255,31 +258,44 @@ def use_lone_last_name_as_full_name(transactors: pd.DataFrame) -> pd.DataFrame:
     same column (Michigan's l_name_or_org, Arizona's LastName), which the
     config maps to last_name. For a record not typed Individual, a last_name
     with no first_name and no full_name is the whole name and moves to
-    full_name, where organization names are compared in linkage. A person
-    the state recorded by last name only keeps it.
+    full_name, where organization names are compared in linkage. An
+    organization whose name was split across the two columns ("MIDLAND
+    COUNTY" / "DEMOCRATIC PARTY") gets both, joined, as its full_name. A
+    person the state recorded by last name only keeps it.
 
     Args:
         transactors: A table with transactor_type, first_name, last_name and
             full_name (first_name may be absent).
 
     Returns:
-        transactors with those last names moved to full_name.
+        transactors with those names moved to full_name.
     """
-    has_first_name = (
-        transactors["first_name"].notna()
+    first_name = (
+        transactors["first_name"]
         if "first_name" in transactors.columns
-        else pd.Series(False, index=transactors.index)
+        else pd.Series(None, index=transactors.index, dtype=object)
     )
+    unnamed = transactors["last_name"].notna() & transactors["full_name"].isna()
     lone_last_name = (
-        (transactors["transactor_type"] != "Individual")
-        & transactors["last_name"].notna()
-        & transactors["full_name"].isna()
-        & ~has_first_name
+        unnamed & (transactors["transactor_type"] != "Individual") & first_name.isna()
+    )
+    split_organization = (
+        unnamed
+        & (transactors["transactor_type"] == "Organization")
+        & first_name.notna()
     )
     transactors.loc[lone_last_name, "full_name"] = transactors.loc[
         lone_last_name, "last_name"
     ]
-    transactors.loc[lone_last_name, "last_name"] = None
+    transactors.loc[split_organization, "full_name"] = (
+        first_name[split_organization].astype(str).str.strip()
+        + " "
+        + transactors.loc[split_organization, "last_name"].astype(str).str.strip()
+    )
+    moved = lone_last_name | split_organization
+    transactors.loc[moved, "last_name"] = None
+    if "first_name" in transactors.columns:
+        transactors.loc[split_organization, "first_name"] = None
     return transactors
 
 

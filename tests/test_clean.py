@@ -302,7 +302,8 @@ def test_a_title_suffix_or_marker_after_the_last_name_is_peeled_off():
         # a supplied prefix is kept
         {"last_name": "KOSKE", "name_prefix": "Dr", "name_suffix": None},
         {"last_name": "JR", "name_prefix": None, "name_suffix": None},
-        {"last_name": " ^ ", "name_prefix": None, "name_suffix": None},
+        # nothing but the marker: null, not an empty string
+        {"last_name": None, "name_prefix": None, "name_suffix": None},
     ]
 
 
@@ -317,22 +318,36 @@ def test_a_lone_last_name_is_the_whole_name_unless_the_record_is_a_person():
                     "Individual",
                     "Individual",
                     "Unknown",
+                    "Organization",
                 ],
-                "first_name": [None, None, None, "ANN", None],
-                "last_name": ["IOSCO COUNTY", "ACME INC", "SMITH", "COBB", "X"],
-                "full_name": [None, None, None, None, "X Corp"],
+                "first_name": [None, None, None, "ANN", None, "MIDLAND COUNTY"],
+                "last_name": [
+                    "IOSCO COUNTY",
+                    "ACME INC",
+                    "SMITH",
+                    "COBB",
+                    "X",
+                    "DEMOCRATIC PARTY ",
+                ],
+                "full_name": [None, None, None, None, "X Corp", None],
             },
             dtype=object,
         )
     )
-    assert table[["full_name", "last_name"]].to_dict("records") == [
-        {"full_name": "IOSCO COUNTY", "last_name": None},
-        {"full_name": "ACME INC", "last_name": None},
+    assert table[["full_name", "first_name", "last_name"]].to_dict("records") == [
+        {"full_name": "IOSCO COUNTY", "first_name": None, "last_name": None},
+        {"full_name": "ACME INC", "first_name": None, "last_name": None},
         # a person recorded by last name only keeps it
-        {"full_name": None, "last_name": "SMITH"},
-        {"full_name": None, "last_name": "COBB"},
+        {"full_name": None, "first_name": None, "last_name": "SMITH"},
+        {"full_name": None, "first_name": "ANN", "last_name": "COBB"},
         # a full name already given is kept
-        {"full_name": "X Corp", "last_name": "X"},
+        {"full_name": "X Corp", "first_name": None, "last_name": "X"},
+        # an organization's name split across the two columns is joined
+        {
+            "full_name": "MIDLAND COUNTY DEMOCRATIC PARTY",
+            "first_name": None,
+            "last_name": None,
+        },
     ]
 
 

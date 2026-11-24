@@ -858,14 +858,9 @@ class ArizonaDataProcessor:
             kept, outside = _within_dates(page, query["StartDate"], query["EndDate"])
             dropped_outside_dates += outside
             all_records.extend(kept)
-            start_position += len(page)
 
-            # Save in batches if enabled
-            if self.save_in_batches:
-                self._save_batch_data(kept, write_path)
-                self._record_progress({write_path.name: start_position})
-
-            # Initialize progress bar after first successful request
+            # Initialize progress bar after first successful request, with
+            # the rows left to fetch before this page is counted
             total_records = response_data.get(
                 "recordsFiltered", response_data.get("recordsTotal", 0)
             )
@@ -881,6 +876,12 @@ class ArizonaDataProcessor:
                 )
             if progress_bar:
                 progress_bar.update(len(page))
+            start_position += len(page)
+
+            # Save in batches if enabled
+            if self.save_in_batches:
+                self._save_batch_data(kept, write_path)
+                self._record_progress({write_path.name: start_position})
 
             # Stop once we've reached the total number of records
             if total_records and start_position >= total_records:
