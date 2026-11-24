@@ -159,9 +159,10 @@ contributions:
       type: str
       standard_name: donor--address--zipcode
 
+    # the schema's Address has no region attribute (the column is a free-text
+    # region of a foreign address), so the column is not kept
     - raw_name: contributorStreetRegion
       type: str
-      standard_name: donor--address--region
 
     - raw_name: contributorEmployer
       type: str
@@ -171,9 +172,10 @@ contributions:
       type: str
       standard_name: donor--employer--role
 
+    # Membership has one role attribute, which contributorOccupation fills,
+    # so the job title is not kept
     - raw_name: contributorJobTitle
       type: str
-      standard_name: donor--employer--job_title
 
     - raw_name: contributorPacFein
       type: str

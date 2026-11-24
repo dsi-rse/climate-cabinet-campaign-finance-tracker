@@ -31,7 +31,7 @@ contributions:
       # optional name suffix
       # office_sought must match one of the fixed options
       # committee is the last token (no spaces)
-      pattern: '^(?P<generated_last_name>[^,]+),\s+(?P<generated_first_name>(?:[A-Za-z]+\s+)*[A-Za-z]+)(?:\s+(?P<generated_name_preferred>\([^)]*\)|\"[^\"]*\"))?(?:\s+(?P<generated_middle_name>[A-Z]{1,2}))?(?:\s+(?P<generated_name_suffix>(?:Jr\.?|Sr\.?|II|III|IV|V)))?\s+(?P<generated_office_sought>(?:Atty Gen|Sup Court|Dist Court|Sec of State|State Aud|App Court|Senate|House|Gov))\s+(?P<generated_committee>\S+)$'
+      pattern: '^(?P<generated_last_name>[^,]+),\s+(?P<generated_first_name>(?:[A-Za-z]+\s+)*[A-Za-z]+)(?:\s+(?P<generated_name_preferred>\([^)]*\)|\"[^\"]*\"))?(?:\s+(?P<generated_middle_name>[A-Z]{1,2}))?(?:\s+(?P<generated_name_suffix>(?:Jr\.?|Sr\.?|II|III|IV|V)))?\s+(?P<generated_office_sought>(?:Atty Gen|Sup Court|Dist Court|Sec of State|State Aud|App Court|Senate|House|Gov))\s+\S+$'
 
   enum_mapper:
     recipient--candidate--member--election_result--election--office_sought:
@@ -198,7 +198,7 @@ expenditures:
       filter:
         "Entity type":
           - PCC
-      pattern: '^(?P<generated_last_name>[^,]+),\s+(?P<generated_first_name>(?:[A-Za-z]+\s+)*[A-Za-z]+)(?:\s+(?P<generated_name_preferred>\([^)]*\)|\"[^\"]*\"))?(?:\s+(?P<generated_middle_name>[A-Z]{1,2}))?(?:\s+(?P<generated_name_suffix>(?:Jr\.?|Sr\.?|II|III|IV|V)))?\s+(?P<generated_office_sought>(?:Atty Gen|Sup Court|Dist Court|Sec of State|State Aud|App Court|Senate|House|Gov))\s+(?P<generated_committee>\S+)$'
+      pattern: '^(?P<generated_last_name>[^,]+),\s+(?P<generated_first_name>(?:[A-Za-z]+\s+)*[A-Za-z]+)(?:\s+(?P<generated_name_preferred>\([^)]*\)|\"[^\"]*\"))?(?:\s+(?P<generated_middle_name>[A-Z]{1,2}))?(?:\s+(?P<generated_name_suffix>(?:Jr\.?|Sr\.?|II|III|IV|V)))?\s+(?P<generated_office_sought>(?:Atty Gen|Sup Court|Dist Court|Sec of State|State Aud|App Court|Senate|House|Gov))\s+\S+$'
   
   filter:
     Type:
@@ -347,7 +347,7 @@ independent_expenditures:
 
   overloaded_columns:
     "Affected Comte Name":
-      pattern: '^(?P<generated_last_name>[^,]+),\s+(?P<generated_first_name>(?:[A-Za-z]+\s+)*[A-Za-z]+)(?:\s+(?P<generated_name_preferred>\([^)]*\)|\"[^\"]*\"))?(?:\s+(?P<generated_middle_name>[A-Z]{1,2}))?(?:\s+(?P<generated_name_suffix>(?:Jr\.?|Sr\.?|II|III|IV|V)))?\s+(?P<generated_office_sought>(?:Atty Gen|Sup Court|Dist Court|Sec of State|State Aud|App Court|Senate|House|Gov))\s+(?P<generated_committee>\S+)$'
+      pattern: '^(?P<generated_last_name>[^,]+),\s+(?P<generated_first_name>(?:[A-Za-z]+\s+)*[A-Za-z]+)(?:\s+(?P<generated_name_preferred>\([^)]*\)|\"[^\"]*\"))?(?:\s+(?P<generated_middle_name>[A-Z]{1,2}))?(?:\s+(?P<generated_name_suffix>(?:Jr\.?|Sr\.?|II|III|IV|V)))?\s+(?P<generated_office_sought>(?:Atty Gen|Sup Court|Dist Court|Sec of State|State Aud|App Court|Senate|House|Gov))\s+\S+$'
 
   enum_mapper:
     affected_party--election_result--election--office_sought:

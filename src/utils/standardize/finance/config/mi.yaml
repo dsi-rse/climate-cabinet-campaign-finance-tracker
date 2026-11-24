@@ -38,10 +38,6 @@ legacy_download_contributions_or_receipts:
       DIS: Committee
       STA: Party
 
-    donor--candidate--member--election_result--election--office_sought: &office_sought
-      STATE SENATE: State Senator
-      STATE REPRESENTATIVE: State Representative
-
   duplicate_columns:
     recipient--transactor_type:
       - recipient--transactor_type_specific
@@ -168,7 +164,10 @@ legacy_download_expenditures:
   enum_mapper:
     donor--transactor_type: *committee_transactor_type
     donor--transactor_type_specific: *committee_transactor_type_specific
-    recipient--candidate--member--election_result--election--office_sought: *office_sought
+    # the office parsed out of "Unnamed: 28" (see overloaded_columns)
+    recipient--candidate--member--election_result--election--office_sought:
+      STATE SENATE: State Senator
+      STATE REPRESENTATIVE: State Representative
 
   duplicate_columns:
     donor--transactor_type:
