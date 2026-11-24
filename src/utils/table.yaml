@@ -25,15 +25,30 @@ Transactor:
     transactor_type:
       - Individual
       - Organization
+    # The values the state configs map to. States describe committees in
+    # their own terms, so several are near-synonyms (Committee, Political
+    # Committee, Political Fund); harmonizing them is open
     transactor_type_specific:
       - Lobbyist
       - Candidate
+      - Candidate Committee
       - Vendor
       - Corporation
+      - Company
       - Non-profit
       - Committee
+      - Political Committee
+      - Political Fund
+      - Independent Expenditure Committee
+      - Independent Expenditure Fund
+      - Ballot Committee
+      - Ballot Fund
       - Party
+      - Political Party
       - Caucus
+      - Individual
+      - Other
+      - Unknown
     party:
       - Republican
       - Democrat
@@ -163,10 +178,17 @@ Transaction:
       table: Transactor
       direction: forward
   enum_columns:
+    # Arizona's config maps its transaction type codes to the finer values
     transaction_type:
       - contribution
+      - in_kind_contribution
       - expenditure
+      - expense
       - independent_expenditure
+      - loan
+      - loan_payment
+      - refund
+      - other
     influence_type:
       - positive
       - negative
@@ -211,6 +233,7 @@ Election:
       - Misc. City
       - Misc. State
       - City Council
+      - Other
   types:
     year: Int32
 

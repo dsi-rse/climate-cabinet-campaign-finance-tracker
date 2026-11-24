@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from utils.standardize.config import ConfigError, ConfigHandler
 from utils.standardize.source import DataSourceStandardizationPipeline
 
 # read configs from the repo so tests work when the package is not installed
@@ -53,3 +54,25 @@ def test_form_loads_every_row(state, form):
         state_data_directory=state_directory
     )
     assert len(table) == n_files * ROWS_PER_FIXTURE_FILE
+
+
+@pytest.mark.parametrize(
+    ("state", "form"),
+    [(state, form) for state in STATES_WITH_FIXTURES for form in standard_forms(state)],
+)
+def test_form_config_is_valid(state, form):
+    """Every shipped form passes the config checks (keys, names, enum values)"""
+    handler = ConfigHandler(form, config_file_path=CONFIG_DIRECTORY / f"{state}.yaml")
+    assert handler.table_name in {"Transaction", "Transactor"}
+
+
+def test_a_misspelled_key_in_a_shipped_config_is_rejected(tmp_path):
+    """A typo in a key, anywhere in a form's inheritance chain, stops the load"""
+    with (CONFIG_DIRECTORY / "tx.yaml").open() as f:
+        config = yaml.safe_load(f)
+    config["base"]["enum_mappr"] = config["base"].pop("enum_mapper", {})
+    path = tmp_path / "tx.yaml"
+    with path.open("w") as f:
+        yaml.safe_dump(config, f)
+    with pytest.raises(ConfigError, match="base: unknown key\\(s\\) enum_mappr"):
+        ConfigHandler("contributions", config_file_path=path)
