@@ -13,6 +13,10 @@ Data notes:
 - Negative amounts (refunds, loan payments) are shown in parentheses.
 - Lobbyist spending is not distinguished, and spending by political organizations
   is sometimes listed as payments to vendors.
+- The search's StartDate and EndDate are ignored for BallotMeasures (a
+  one-week request returned 894,606 rows, the whole category), so the
+  collector drops rows dated outside the requested range itself, for every
+  category, and says how many it dropped. The server still sends them all.
 - The search's Position filter (Support or Oppose) only applies to independent
   expenditures; the other categories return the same rows whatever it is set
   to, and the rows themselves don't say which it was. Independent expenditures
@@ -21,15 +25,21 @@ Data notes:
 
 Each search is logged as one line in <raw>/az/_downloads.jsonl (see
 utils.collect.downloads): the query (category, cycle, dates, filer type and
-position), when it ran, how many records it returned, and the file's size and
-sha256. A run writes to hidden temporary files and replaces the previous files
-only when it finishes, so a failed or interrupted run leaves them as they were.
+position), when it ran, how many records it returned and how many of those
+were dropped for their date, and the file's size and sha256. A run writes to
+hidden temporary files and replaces the previous files only when it finishes,
+so a failed or interrupted run leaves them as they were. The server offset
+each file's query reached is kept in _progress.json beside the files, so a
+run without override_existing_data resumes where the last one stopped even
+when rows were dropped.
 """
 
 import argparse
 import datetime
+import json
 import time
 from pathlib import Path
+from typing import NamedTuple
 
 import pandas as pd
 import requests
@@ -92,6 +102,8 @@ MAX_SKIPPED_TRANSACTOR_SHARE = 0.05
 POSITIONS = ("Support", "Oppose")
 POSITIONS_BY_CATEGORY = {"IndependentExpenditures": POSITIONS}
 NO_POSITION = ("",)
+# Server offset reached by each file's query, by file name, beside the files
+PROGRESS_FILE = "_progress.json"
 # Largest page size requested from the advanced search endpoint. Requests take
 # about the same time up to at least 2500 rows, but the server returns HTTP 500
 # for 5000 rows (tested September 2026).
@@ -553,13 +565,19 @@ class ArizonaDataProcessor:
             filer_type_id: ID of the filer type the query was for
             cycle_id: Election cycle the query was for
         """
+        progress = self._read_progress()
+        changes: dict[str, int | None] = {}
         for file in self._existing_query_files(
             report_category, filer_type_id, cycle_id
         ):
             file.unlink()
+            changes[file.name] = None
         for output_file, temporary_file in written.items():
+            changes[temporary_file.name] = None
             if temporary_file.exists():
                 temporary_file.replace(output_file)
+                changes[output_file.name] = progress.get(temporary_file.name)
+        self._record_progress(changes)
 
     def _log_query(
         self,
@@ -568,6 +586,7 @@ class ArizonaDataProcessor:
         query: dict,
         records: int,
         retrieved_at: str,
+        dropped_outside_dates: int = 0,
     ) -> None:
         """Record a finished query in the download log, if one is kept
 
@@ -575,8 +594,10 @@ class ArizonaDataProcessor:
             output_file: File the results were written to.
             url: Endpoint queried.
             query: The query's parameters.
-            records: How many records the query returned.
+            records: How many records were kept from the query.
             retrieved_at: When the query started.
+            dropped_outside_dates: How many records the server returned that
+                were dated outside the query's range and dropped.
         """
         if self.records_directory is None:
             return
@@ -586,6 +607,7 @@ class ArizonaDataProcessor:
             "finished_at": utc_now(),
             "query": query,
             "records": records,
+            "dropped_outside_dates": dropped_outside_dates,
         }
         if output_file.exists():
             record.update(
@@ -600,15 +622,51 @@ class ArizonaDataProcessor:
         return self.output_path / f"{transactor_type}.csv"
 
     def _get_resume_position(self, file_path: Path) -> int:
-        """Get the position to resume from based on existing data."""
-        if not self.override_existing_data and file_path.exists():
-            try:
-                existing_df = pd.read_csv(file_path)
-                return len(existing_df)
-            except Exception as e:
-                print(f"Error reading existing file {file_path}: {e}")
-                return 0
-        return 0
+        """Server offset to resume a file's query from
+
+        The offset recorded in PROGRESS_FILE when the file was last written.
+        A file with no recorded offset was written before offsets were kept,
+        when every row the server returned was saved, so its row count is the
+        offset.
+        """
+        if self.override_existing_data or not file_path.exists():
+            return 0
+        offset = self._read_progress().get(file_path.name)
+        if offset is not None:
+            return offset
+        try:
+            existing_df = pd.read_csv(file_path)
+            return len(existing_df)
+        except Exception as e:
+            print(f"Error reading existing file {file_path}: {e}")
+            return 0
+
+    def _read_progress(self) -> dict[str, int]:
+        """Server offset reached by each file's query, by file name"""
+        path = self.output_path / PROGRESS_FILE
+        if not path.exists():
+            return {}
+        try:
+            return json.loads(path.read_text())
+        except (OSError, ValueError) as error:
+            print(f"Ignoring unreadable {path}: {error}")
+            return {}
+
+    def _record_progress(self, changes: dict[str, int | None]) -> None:
+        """Update PROGRESS_FILE: a file's new offset, or None to forget it"""
+        progress = self._read_progress()
+        for name, offset in changes.items():
+            if offset is None:
+                progress.pop(name, None)
+            else:
+                progress[name] = offset
+        path = self.output_path / PROGRESS_FILE
+        if not progress:
+            path.unlink(missing_ok=True)
+            return
+        temporary = path.with_name(f".{path.name}.new")
+        temporary.write_text(json.dumps(progress, indent=1, sort_keys=True))
+        temporary.replace(path)
 
     def _save_batch_data(self, data: list[dict], file_path: Path) -> None:
         """Save a batch of data to file."""
@@ -726,25 +784,31 @@ class ArizonaDataProcessor:
                     "Position": position,
                 }
                 retrieved_at = utc_now()
-                records = self._fetch_all_pages(api, query, start_position, write_path)
-                frame = pd.DataFrame(records)
+                fetched = self._fetch_all_pages(api, query, start_position, write_path)
+                frame = pd.DataFrame(fetched.records)
                 if position:
                     frame["Position"] = position
                 frames.append(frame)
-                queries.append((output_file, query, len(records), retrieved_at))
+                queries.append((output_file, query, fetched, retrieved_at))
         except BaseException:
             if self.override_existing_data:
                 for write_path in written.values():
                     write_path.unlink(missing_ok=True)
+                self._record_progress({path.name: None for path in written.values()})
             raise
 
         if self.override_existing_data:
             self._replace_query_files(
                 written, report_category, filer_type_id, election_cycle
             )
-        for output_file, query, count, retrieved_at in queries:
+        for output_file, query, fetched, retrieved_at in queries:
             self._log_query(
-                output_file, ADVANCED_SEARCH_URL, query, count, retrieved_at
+                output_file,
+                ADVANCED_SEARCH_URL,
+                query,
+                len(fetched.records),
+                retrieved_at,
+                dropped_outside_dates=fetched.dropped_outside_dates,
             )
 
         complete_data = pd.concat(frames, ignore_index=True)
@@ -756,20 +820,27 @@ class ArizonaDataProcessor:
 
     def _fetch_all_pages(
         self, api: ArizonaAPI, query: dict, start_position: int, write_path: Path
-    ) -> list[dict]:
+    ) -> "FetchedPages":
         """Page through one query's results, saving batches as they arrive
+
+        The server offset advances by the rows the server sent, not the rows
+        kept: a page may hold rows dated outside the query's range, which are
+        dropped. The offset reached is recorded in PROGRESS_FILE under the
+        file's name after each save, so an interrupted run can resume.
 
         Args:
             api: ArizonaAPI instance for making API calls
             query: CategoryType, CycleId, StartDate, EndDate, FilerTypeId and
                 Position for the search.
-            start_position: Record to start from (rows already saved).
+            start_position: Server offset to start from.
             write_path: File to append batches to.
 
         Returns:
-            The records fetched by this call.
+            The records kept by this call, how many were dropped for their
+            date, and the server offset reached.
         """
         all_records = []
+        dropped_outside_dates = 0
         # batch_size is None when data is not saved in batches
         page_size = min(self.batch_size or MAX_PAGE_SIZE, MAX_PAGE_SIZE)
         progress_bar = None
@@ -779,17 +850,17 @@ class ArizonaDataProcessor:
                 api, query, start_position, page_size
             )
 
-            if not response_data["data"]:
+            page = response_data["data"]
+            if not page:
                 break
 
-            records = response_data["data"]
-            all_records.extend(records)
+            # the server ignores the dates for some categories (BallotMeasures)
+            kept, outside = _within_dates(page, query["StartDate"], query["EndDate"])
+            dropped_outside_dates += outside
+            all_records.extend(kept)
 
-            # Save in batches if enabled
-            if self.save_in_batches:
-                self._save_batch_data(records, write_path)
-
-            # Initialize progress bar after first successful request
+            # Initialize progress bar after first successful request, with
+            # the rows left to fetch before this page is counted
             total_records = response_data.get(
                 "recordsFiltered", response_data.get("recordsTotal", 0)
             )
@@ -804,10 +875,13 @@ class ArizonaDataProcessor:
                     unit="records",
                 )
             if progress_bar:
-                progress_bar.update(len(records))
+                progress_bar.update(len(page))
+            start_position += len(page)
 
-            # Advance by the number of records actually returned
-            start_position += len(records)
+            # Save in batches if enabled
+            if self.save_in_batches:
+                self._save_batch_data(kept, write_path)
+                self._record_progress({write_path.name: start_position})
 
             # Stop once we've reached the total number of records
             if total_records and start_position >= total_records:
@@ -818,11 +892,18 @@ class ArizonaDataProcessor:
 
         if progress_bar:
             progress_bar.close()
+        if dropped_outside_dates:
+            print(
+                f"Dropped {dropped_outside_dates:,} {query['CategoryType']} records"
+                f" dated outside {query['StartDate']} to {query['EndDate']}; the"
+                " server ignored the date range"
+            )
 
         # Save final data if not saving in batches
         if not self.save_in_batches:
             self._save_batch_data(all_records, write_path)
-        return all_records
+            self._record_progress({write_path.name: start_position})
+        return FetchedPages(all_records, dropped_outside_dates, start_position)
 
     def _fetch_page_with_retries(
         self, api: ArizonaAPI, query: dict, start: int, length: int
@@ -1163,6 +1244,55 @@ class ArizonaDataProcessor:
             ):
                 cycle_ids.append(cycle_info["id"])
         return cycle_ids
+
+
+class FetchedPages(NamedTuple):
+    """What _fetch_all_pages fetched for one query"""
+
+    records: list[dict]
+    dropped_outside_dates: int
+    offset: int
+
+
+def _within_dates(
+    records: list[dict], start_date: str, end_date: str
+) -> tuple[list[dict], int]:
+    """Keep the records whose TransactionDate is in the requested range
+
+    The search returns dates as "/Date(<milliseconds since 1970>)/". A record
+    with no readable date is kept, since the range can't be checked.
+
+    Args:
+        records: One page of records from the search.
+        start_date: First day to keep, YYYY-MM-DD.
+        end_date: Last day to keep, YYYY-MM-DD.
+
+    Returns:
+        The records in range, and how many were dropped.
+    """
+    first = datetime.date.fromisoformat(start_date)
+    last = datetime.date.fromisoformat(end_date)
+    kept = []
+    for record in records:
+        transaction_date = _parse_search_date(record.get("TransactionDate"))
+        if transaction_date is None or first <= transaction_date <= last:
+            kept.append(record)
+    return kept, len(records) - len(kept)
+
+
+def _parse_search_date(value: object) -> datetime.date | None:
+    """Read a search result's "/Date(1714028400000)/" as a date, or None"""
+    if not isinstance(value, str):
+        return None
+    digits = "".join(
+        character for character in value if character.isdigit() or character == "-"
+    )
+    try:
+        return datetime.datetime.fromtimestamp(
+            int(digits) / 1000, tz=datetime.timezone.utc
+        ).date()
+    except (ValueError, OverflowError, OSError):
+        return None
 
 
 def get_cycle_info_by_year(year: int, api: ArizonaAPI) -> dict[str, str] | None:

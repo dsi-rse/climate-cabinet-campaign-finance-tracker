@@ -11,6 +11,7 @@ from utils.clean.transactor import (
     clean_transactors,
     divide_full_name_nameparser,
     fill_in_transactor_types,
+    use_lone_last_name_as_full_name,
 )
 from utils.constants import DEFAULT_SCHEMA_PATH
 from utils.database import connect_duckdb, create_or_append_parquet_to_db
@@ -253,6 +254,143 @@ def test_an_organization_word_in_the_last_name_alone_is_enough():
     )
     assert table["transactor_type"].tolist() == ["Organization", "Unknown"]
     assert table["transactor_type_inferred"].tolist() == [True, False]
+
+
+def test_a_supplied_first_name_makes_an_untyped_row_an_individual():
+    """Michigan gives donors a first name and no type; organization words still win"""
+    table = fill_in_transactor_types(
+        pd.DataFrame(
+            {
+                "full_name": None,
+                "first_name": ["NANCY", "Pat", None],
+                "last_name": ["BEREZNICKI", "Acme Inc", "IOSCO COUNTY"],
+                "transactor_type": pd.Series([None, None, None], dtype=object),
+            }
+        )
+    )
+    assert table["transactor_type"].tolist() == [
+        "Individual",
+        "Organization",
+        "Unknown",
+    ]
+    assert table["transactor_type_inferred"].tolist() == [True, True, False]
+
+
+def test_a_title_suffix_or_marker_after_the_last_name_is_peeled_off():
+    """Michigan writes a title, suffix or " ^" marker after the last name"""
+    table = clean_individuals_names(
+        names_table(
+            [
+                {"last_name": "COBB ^", "first_name": "ANN"},
+                {"last_name": "KOSKE MR.^", "first_name": "PAUL"},
+                {"last_name": "WRIGHT JR", "first_name": "SAM"},
+                {"last_name": "MC LARTY", "first_name": "JO"},
+                {"last_name": "*BITTERMAN", "first_name": "LEE"},
+                {"last_name": "KOSKE MR.^", "first_name": "PAUL", "name_prefix": "Dr"},
+                # a one-word last name is kept even when it is a title word
+                {"last_name": "JR", "first_name": "KIM"},
+                {"last_name": " ^ ", "first_name": "KIM"},
+            ]
+        )
+    )
+    assert name_parts(table, ["last_name", "name_prefix", "name_suffix"]) == [
+        {"last_name": "COBB", "name_prefix": None, "name_suffix": None},
+        {"last_name": "KOSKE", "name_prefix": "MR", "name_suffix": None},
+        {"last_name": "WRIGHT", "name_prefix": None, "name_suffix": "JR"},
+        {"last_name": "MC LARTY", "name_prefix": None, "name_suffix": None},
+        {"last_name": "BITTERMAN", "name_prefix": None, "name_suffix": None},
+        # a supplied prefix is kept
+        {"last_name": "KOSKE", "name_prefix": "Dr", "name_suffix": None},
+        {"last_name": "JR", "name_prefix": None, "name_suffix": None},
+        # nothing but the marker: null, not an empty string
+        {"last_name": None, "name_prefix": None, "name_suffix": None},
+    ]
+
+
+def test_a_lone_last_name_is_the_whole_name_unless_the_record_is_a_person():
+    """A last-name-or-organization column (MI, AZ) holds organizations' names"""
+    table = use_lone_last_name_as_full_name(
+        pd.DataFrame(
+            {
+                "transactor_type": [
+                    "Unknown",
+                    "Organization",
+                    "Individual",
+                    "Individual",
+                    "Unknown",
+                    "Organization",
+                ],
+                "first_name": [None, None, None, "ANN", None, "MIDLAND COUNTY"],
+                "last_name": [
+                    "IOSCO COUNTY",
+                    "ACME INC",
+                    "SMITH",
+                    "COBB",
+                    "X",
+                    "DEMOCRATIC PARTY ",
+                ],
+                "full_name": [None, None, None, None, "X Corp", None],
+            },
+            dtype=object,
+        )
+    )
+    assert table[["full_name", "first_name", "last_name"]].to_dict("records") == [
+        {"full_name": "IOSCO COUNTY", "first_name": None, "last_name": None},
+        {"full_name": "ACME INC", "first_name": None, "last_name": None},
+        # a person recorded by last name only keeps it
+        {"full_name": None, "first_name": None, "last_name": "SMITH"},
+        {"full_name": None, "first_name": "ANN", "last_name": "COBB"},
+        # a full name already given is kept
+        {"full_name": "X Corp", "first_name": None, "last_name": "X"},
+        # an organization's name split across the two columns is joined
+        {
+            "full_name": "MIDLAND COUNTY DEMOCRATIC PARTY",
+            "first_name": None,
+            "last_name": None,
+        },
+    ]
+
+
+def test_clean_transactors_types_then_moves_organization_names():
+    """End to end for a state that gives donors a first name and no type"""
+    table = clean_transactors(
+        pd.DataFrame(
+            {
+                "id": ["1", "2", "3"],
+                "transactor_type": pd.Series([None, None, None], dtype=object),
+                "first_name": ["NANCY", None, None],
+                "last_name": ["BEREZNICKI ^", "IOSCO COUNTY", "EXAMPLE INDUSTRY PAC"],
+                "full_name": None,
+                "middle_name": None,
+                "name_prefix": None,
+                "name_suffix": None,
+                "name_preferred": None,
+                "phone_number": None,
+            }
+        )
+    ).sort_values("id")
+    assert table[["transactor_type", "first_name", "last_name", "full_name"]].astype(
+        object
+    ).where(lambda t: t.notna(), None).to_dict("records") == [
+        {
+            "transactor_type": "Individual",
+            "first_name": "NANCY",
+            "last_name": "BEREZNICKI",
+            "full_name": None,
+        },
+        {
+            "transactor_type": "Unknown",
+            "first_name": None,
+            "last_name": None,
+            "full_name": "IOSCO COUNTY",
+        },
+        {
+            "transactor_type": "Organization",
+            "first_name": None,
+            "last_name": None,
+            "full_name": "EXAMPLE INDUSTRY PAC",
+        },
+    ]
 
 
 NAME_COLUMNS = [
@@ -512,6 +650,29 @@ def test_unreadable_booleans_become_null_with_a_warning():
     with pytest.warns(UserWarning, match="1 values in 'win'.*'maybe'"):
         cleaned = clean_table_columns(results, schema)
     assert cleaned["win"].isna().all()
+
+
+def test_impossible_dates_become_null_with_a_warning():
+    """A date outside what a timestamp can hold doesn't stop the state
+
+    Pennsylvania's 2024 file has a contribution dated 24201018 (year 2420).
+    """
+    import datetime
+
+    schema = DataSchema(DEFAULT_SCHEMA_PATH).schema["Transaction"]
+    transactions = pd.DataFrame(
+        {
+            "amount": [1.0, 2.0, 3.0],
+            "donor_id": ["d1", "d2", "d3"],
+            "recipient_id": ["r1", "r2", "r3"],
+            "date": [datetime.date(2024, 10, 18), datetime.date(2420, 10, 18), None],
+        }
+    )
+    with pytest.warns(UserWarning, match="1 values in 'date'.*2420-10-18"):
+        cleaned = clean_table_columns(transactions, schema)
+    assert str(cleaned["date"].dtype) == "datetime64[ns]"
+    assert cleaned["date"].tolist()[0] == pd.Timestamp("2024-10-18")
+    assert cleaned["date"].isna().tolist() == [False, True, True]
 
 
 @pytest.mark.parametrize(

@@ -20,6 +20,13 @@ TRAINING_SAMPLE_TABLE = "random_subset"
 # Seed for the training sample and for estimating u, so training on the same
 # data gives the same model
 TRAINING_SEED = 42
+# Which records training samples. Link trusts the type clean settled on: a
+# state that gives no type has it inferred there (see
+# utils.clean.transactor.fill_in_transactor_types), not here
+PERSON_FILTER = "transactor_type = 'Individual'"
+# Fewer records than this can't train a model; Splink divides by the number
+# of record pairs, so an empty sample ended in ZeroDivisionError
+MIN_TRAINING_RECORDS = 2
 # Key used to store per-level EM training history inside checkpoint files
 TRAINED_M_HISTORY_KEY = "cft_trained_m_history"
 
@@ -27,24 +34,62 @@ TRAINED_M_HISTORY_KEY = "cft_trained_m_history"
 def create_random_individuals_subset(
     con: duckdb.DuckDBPyConnection, table_name: str, size: int
 ) -> None:
-    """Create a temp table that is a random subset of individuals in table_name
+    """Create a temp table that is a random subset of the people in table_name
 
-    Individuals are filtered before sampling so the subset has `size` rows
-    whenever the table has at least that many individuals. Rows are picked by
-    a hash of their id and TRAINING_SEED (ties broken by a hash of the whole
-    row), not by DuckDB's sampling: a seeded sample depends on the order rows
-    are scanned in, which changes when the database is rebuilt or read with
-    more threads. Ids are repeatable, so the same data gives the same sample.
+    People are filtered before sampling so the subset has `size` rows
+    whenever the table has at least that many. A record is a person when its
+    transactor_type is Individual (see PERSON_FILTER). Rows are picked by a
+    hash of their id and
+    TRAINING_SEED (ties broken by a hash of the whole row), not by DuckDB's
+    sampling: a seeded sample depends on the order rows are scanned in,
+    which changes when the database is rebuilt or read with more threads.
+    Ids are repeatable, so the same data gives the same sample.
     """
     con.execute(f"""
         CREATE OR REPLACE TEMP TABLE {TRAINING_SAMPLE_TABLE} AS
-        SELECT individuals.*
+        SELECT people.*
         FROM (
-            SELECT * FROM {table_name} WHERE transactor_type = 'Individual'
-        ) AS individuals
-        ORDER BY hash(individuals.id, {TRAINING_SEED}), hash(individuals)
+            SELECT * FROM {table_name} WHERE {PERSON_FILTER}
+        ) AS people
+        ORDER BY hash(people.id, {TRAINING_SEED}), hash(people)
         LIMIT {size}
     """)
+
+
+def _check_enough_people_to_train(
+    con: duckdb.DuckDBPyConnection, table_name: str
+) -> None:
+    """Stop before Splink does if there is nothing to train on
+
+    Args:
+        con: duckdb connection.
+        table_name: Table training will run on, before it is sampled, so the
+            counts describe the data rather than an empty sample.
+
+    Raises:
+        ValueError: if fewer than MIN_TRAINING_RECORDS rows are people (see
+            PERSON_FILTER), naming the transactor_type counts so the cause
+            (types the state didn't give and clean couldn't infer, or a
+            filter that dropped them) is visible.
+    """
+    people = con.execute(
+        f"SELECT count(*) FROM {table_name} WHERE {PERSON_FILTER}"
+    ).fetchone()[0]
+    if people >= MIN_TRAINING_RECORDS:
+        return
+    counts = con.execute(
+        f"SELECT coalesce(transactor_type, 'NULL'), count(*), count(first_name)"
+        f" FROM {table_name} GROUP BY 1 ORDER BY 2 DESC"
+    ).fetchall()
+    described = ", ".join(
+        f"{kind}: {n:,} ({with_name:,} with a first name)"
+        for kind, n, with_name in counts
+    )
+    raise ValueError(
+        f"Only {people} record(s) in {table_name} are people (transactor_type"
+        f" Individual), so there is nothing to train the linkage model on."
+        f" Records by type: {described or 'none'}."
+    )
 
 
 def _get_trained_m_history(linker: Linker) -> dict[str, dict[str, list[float]]]:
@@ -107,8 +152,8 @@ def train_splink(
     """Train splink linker and save to json
 
     If table_name has more than TRAINING_SAMPLE_SIZE rows, training uses a random
-    sample of TRAINING_SAMPLE_SIZE individuals (transactor_type = 'Individual')
-    from it instead of the full table.
+    sample of TRAINING_SAMPLE_SIZE people (see PERSON_FILTER) from it instead
+    of the full table.
 
     Args:
         con: duckdb connection to database that has table table_name with arguments
@@ -121,7 +166,13 @@ def train_splink(
         resume_from_checkpoint: if True, load from checkpoint and skip initial
             training. As in a run from scratch, final m probabilities combine the
             estimates from both EM sessions.
+
+    Raises:
+        ValueError: if the table has fewer than MIN_TRAINING_RECORDS people to
+            train on. Splink would otherwise fail with a division by zero deep
+            in its probability estimate.
     """
+    _check_enough_people_to_train(con, table_name)
     # Sample dataset if it's too large for training to prevent disk space issues
     row_count = con.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
     if row_count > TRAINING_SAMPLE_SIZE:

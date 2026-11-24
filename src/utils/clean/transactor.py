@@ -3,6 +3,7 @@
 import re
 
 import nameparser
+import numpy as np
 import pandas as pd
 
 from utils.normalize import combine_rows_sharing_an_id
@@ -31,6 +32,10 @@ company_name_patterns = [
     r"citizens for",
 ]
 _ORGANIZATION_NAME_REGEX = rf"\b(?:{'|'.join(company_name_patterns)})\b"
+
+# Titles and suffixes a state writes after a surname ("KOSKE MR.", "WRIGHT JR")
+_TITLE_WORDS = {"mr", "mrs", "ms", "miss", "dr", "rev", "hon"}
+_SUFFIX_WORDS = {"jr", "sr", "ii", "iii", "iv", "esq"}
 
 
 def _clean_name_components(
@@ -83,10 +88,42 @@ def divide_full_name_nameparser(full_name: str) -> dict[str, str | None]:
     return _clean_name_components(name_components)
 
 
+def _peel_title_and_suffix(last_name: str) -> dict[str, str | None]:
+    """Take a trailing title, suffix or stray marker off a last name
+
+    States write them after the surname: "KOSKE MR.", "WRIGHT JR", and
+    Michigan's "OLDHAM ^". A one-word value is left alone, so a surname that
+    is itself a title word stays.
+
+    Args:
+        last_name: The last name as the state wrote it.
+
+    Returns:
+        last_name, name_prefix and name_suffix, cleaned; missing ones None.
+    """
+    words = re.sub(r"\s*\^\s*$", "", last_name).split()
+    prefix = suffix = None
+    while len(words) > 1:
+        word = words[-1].rstrip(".,").lower()
+        if word in _TITLE_WORDS and prefix is None:
+            prefix = words.pop()
+        elif word in _SUFFIX_WORDS and suffix is None:
+            suffix = words.pop()
+        else:
+            break
+    return _clean_name_components(
+        {"last_name": " ".join(words), "name_prefix": prefix, "name_suffix": suffix}
+    )
+
+
 def clean_individuals_names(names: pd.DataFrame) -> pd.DataFrame:
     """Fill in missing name parts by parsing the full name
 
     Name parts the state supplied are never replaced:
+    - a trailing title, suffix or " ^" marker is taken off a supplied
+      last_name ("KOSKE MR.^", "WRIGHT JR") and fills name_prefix or
+      name_suffix if those are missing (see _peel_title_and_suffix); a
+      last_name with no letters left becomes null
     - if both first_name and last_name are missing, every missing part
       (first, middle, last, prefix, suffix, preferred) is filled from the
       parsed full_name
@@ -116,6 +153,27 @@ def clean_individuals_names(names: pd.DataFrame) -> pd.DataFrame:
     ]
     # that last name was the whole name, so it is missing too and gets filled
     names.loc[likely_full_names, "last_name"] = None
+    # a title or suffix written after the last name is not part of it
+    has_last_name = names["last_name"].notna().to_numpy()
+    if has_last_name.any():
+        peeled = [
+            _peel_title_and_suffix(str(last_name))
+            for last_name in names["last_name"].to_numpy()[has_last_name]
+        ]
+        for column in ("last_name", "name_prefix", "name_suffix"):
+            values = names[column].to_numpy(dtype=object).copy()
+            current = values[has_last_name]
+            parsed = np.array([parts[column] for parts in peeled], dtype=object)
+            if column == "last_name":
+                # the peeled surname replaces the field it came from; a field
+                # with nothing else in it (" ", "^", digits) becomes null
+                # rather than an empty string that would match other empties
+                current[:] = parsed
+            else:
+                missing = pd.isna(current)
+                current[missing] = parsed[missing]
+            values[has_last_name] = current
+            names[column] = values
     first_missing = names["first_name"].isna().to_numpy()
     last_missing = names["last_name"].isna().to_numpy()
     to_parse = names["full_name"].notna().to_numpy() & (first_missing | last_missing)
@@ -157,11 +215,13 @@ def fill_in_transactor_types(names: pd.DataFrame) -> pd.DataFrame:
 
     A type the state supplied is never changed. A missing type becomes
     "Organization" when full_name or last_name contains a word from
-    company_name_patterns, and "Unknown" otherwise.
+    company_name_patterns, "Individual" when the state gave a first name
+    and the name has no such word (a state that gives donors no type still
+    gives people a first name), and "Unknown" otherwise.
 
     Args:
         names: A dataframe with columns full_name, last_name and
-            transactor_type.
+            transactor_type, and first_name if the state supplies one.
 
     Returns:
         names with transactor_type filled in, and transactor_type_inferred
@@ -177,11 +237,66 @@ def fill_in_transactor_types(names: pd.DataFrame) -> pd.DataFrame:
         )
         .any(axis=1)
     )
-    inferred = missing_type & looks_like_organization
-    names.loc[inferred, "transactor_type"] = "Organization"
+    has_first_name = (
+        names["first_name"].notna()
+        if "first_name" in names.columns
+        else pd.Series(False, index=names.index)
+    )
+    organization = missing_type & looks_like_organization
+    individual = missing_type & ~looks_like_organization & has_first_name
+    names.loc[organization, "transactor_type"] = "Organization"
+    names.loc[individual, "transactor_type"] = "Individual"
     names["transactor_type"] = names["transactor_type"].fillna("Unknown")
-    names["transactor_type_inferred"] = inferred.to_numpy()
+    names["transactor_type_inferred"] = (organization | individual).to_numpy()
     return names
+
+
+def use_lone_last_name_as_full_name(transactors: pd.DataFrame) -> pd.DataFrame:
+    """Treat a last name with no first name as the whole name, except for a person
+
+    Some states put a person's last name and an organization's name in the
+    same column (Michigan's l_name_or_org, Arizona's LastName), which the
+    config maps to last_name. For a record not typed Individual, a last_name
+    with no first_name and no full_name is the whole name and moves to
+    full_name, where organization names are compared in linkage. An
+    organization whose name was split across the two columns ("MIDLAND
+    COUNTY" / "DEMOCRATIC PARTY") gets both, joined, as its full_name. A
+    person the state recorded by last name only keeps it.
+
+    Args:
+        transactors: A table with transactor_type, first_name, last_name and
+            full_name (first_name may be absent).
+
+    Returns:
+        transactors with those names moved to full_name.
+    """
+    first_name = (
+        transactors["first_name"]
+        if "first_name" in transactors.columns
+        else pd.Series(None, index=transactors.index, dtype=object)
+    )
+    unnamed = transactors["last_name"].notna() & transactors["full_name"].isna()
+    lone_last_name = (
+        unnamed & (transactors["transactor_type"] != "Individual") & first_name.isna()
+    )
+    split_organization = (
+        unnamed
+        & (transactors["transactor_type"] == "Organization")
+        & first_name.notna()
+    )
+    transactors.loc[lone_last_name, "full_name"] = transactors.loc[
+        lone_last_name, "last_name"
+    ]
+    transactors.loc[split_organization, "full_name"] = (
+        first_name[split_organization].astype(str).str.strip()
+        + " "
+        + transactors.loc[split_organization, "last_name"].astype(str).str.strip()
+    )
+    moved = lone_last_name | split_organization
+    transactors.loc[moved, "last_name"] = None
+    if "first_name" in transactors.columns:
+        transactors.loc[split_organization, "first_name"] = None
+    return transactors
 
 
 def clean_phone_number(val: object) -> str | None:
@@ -238,6 +353,7 @@ def clean_transactors(transactors: pd.DataFrame) -> pd.DataFrame:
     transactors = combine_rows_sharing_an_id(transactors, "Transactor")
     # fill in transactor types
     transactors = fill_in_transactor_types(transactors)
+    transactors = use_lone_last_name_as_full_name(transactors)
     transactors = clean_names(transactors)
     transactors["phone_number"] = transactors["phone_number"].apply(clean_phone_number)
     return transactors

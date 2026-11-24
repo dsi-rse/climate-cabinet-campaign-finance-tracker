@@ -243,7 +243,9 @@ def test_mi_independent_committee_is_an_organization(mi_receipts):
             "recipient--transactor_type": "Organization",
             "recipient--transactor_type_specific": "Committee",
             "donor--first_name": "JANE",
-            "donor--full_name": "TESTPERSON",
+            # l_name_or_org: a last name or an organization name
+            "donor--last_name": "TESTPERSON",
+            "donor--full_name": None,
             "date": "2022-03-14",
         },
     )
@@ -263,7 +265,7 @@ def test_mi_committee_contribution_to_a_candidate_committee(mi_expenditures):
             "donor--full_name": "EXAMPLE INDUSTRY POLITICAL ACTION COMMITTEE",
             "donor--transactor_type_specific": "Committee",
             "recipient_id": None,
-            "recipient--full_name": "FRIENDS OF SAM SAMPLE",
+            "recipient--last_name": "FRIENDS OF SAM SAMPLE",
             "recipient--address--city": "DETROIT",
             "recipient--candidate--member--full_name": "SAM SAMPLE",
             "recipient--candidate--member--election_result--election--office_sought": "State Representative",
@@ -288,7 +290,7 @@ def test_mi_expenditure_is_paid_by_the_filer(
             "donor--full_name": "FRIENDS OF SAM SAMPLE",
             "donor--transactor_type_specific": "Candidate Committee",
             "recipient--first_name": first_name,
-            "recipient--full_name": payee,
+            "recipient--last_name": payee,
         },
     )
 
