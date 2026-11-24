@@ -40,6 +40,7 @@ Add synthetic raw files for the state under `tests/data/standardize/raw/<state c
 - **Headers.** A form that reads columns by position (the default, `include_column_order: True`) has its `column_order` checked against each file before the file is read. With `header: 0`, the file's header must match `column_order`, ignoring case, spacing and a byte order mark. With `header: null`, the first row must have as many columns as `column_order` and must not be the header itself. Any other file raises `HeaderMismatchError`, which names the file and the columns that differ, so a state adding, dropping or reordering columns stops the run instead of putting values under the wrong names. Forms that read columns by header name (`include_column_order: False`) are not checked.
 - **Superseded rows and who filed.** If the state marks rows that a corrected report has replaced (Texas's `infoOnlyFlag`), drop them with the form's `filter` so they aren't counted twice, and say in the config what the marker means. Every Transaction form sets `reported_by`: `recipient` for a file the receiving committee filed (contributions), `donor` for one the paying committee filed (expenditures). Rows that `transaction_direction` reverses switch it automatically. Linkage uses it to count a transfer between two filers once (`Transaction_deduplicated`), so don't drop the payer's copy at standardize unless the state gives no other way to tell the two apart.
 - **Values that become null.** A raw value becomes null if it is missing from an `enum_mapper` mapping, doesn't fit its `date_format`, or isn't a number in a `post_load_float` column. Each file that has such values logs a warning with counts per column. `cft standardize` writes every distinct value, with its count, form and file, to `standardized/<state>/reports/coerced_values.csv`. Values mapped to null on purpose (a key with an empty value) and unmapped `transaction_direction` values are not reported. Check this report when adding a state or a mapping: most rows mean a mapping is missing a value.
+- **The config itself.** A form is checked when it loads, and a `ConfigError` lists every problem at once, with the file and form. It catches: a key that isn't one the code reads (in the form or any block it inherits from), a column entry without `raw_name` and `type` or with a `type` pandas doesn't know, a `standard_name` that doesn't resolve against `table.yaml` for the form's `table_name` (each `--` part must be a relation of the table it's applied to and the last part an attribute; such a column would otherwise be carried along and dropped when the database is loaded), two columns the form reads given the same `standard_name`, an `enum_mapper` or `null_values` entry for a column the form never produces (the mapping would never be applied), an `enum_mapper` value that `table.yaml` doesn't list for an enum column, a `filter`, `year_column` or `overloaded_columns` entry naming a raw column the form doesn't have, a named group in an `overloaded_columns` pattern that isn't in `column_details`, `reported_by` or `transaction_direction` on a form that isn't a Transaction, and a missing `table_name` or `path_pattern` on a form that isn't `meta`. `tests/test_state_configs.py` loads every shipped form, so a broken config fails the suite.
 
 
 ### Configuration File Schema
@@ -57,7 +58,7 @@ transactors:
   inherits: base
   foo: z
 ```
-`transactors` will be read as having `foo = z` and `bar = y`. 
+`transactors` will be read as having `foo = z` and `bar = y`. Only `column_details` is merged (the child's entry for a `raw_name` replaces the parent's; the rest are kept); every other key the child sets replaces the parent's value whole, so a child that sets `enum_mapper` or `null_values` must list everything it needs. An inherited column can't be removed, but a child's `column_order` only names the columns its files have, so a parent column left out of it is not read. Put a mapping or `null_values` entry on the form whose columns it names rather than on a shared base: validation rejects an entry for a column the form doesn't produce.
 
 Both first level keys have the same set of subkeys:
 - `state_code`: two letter lowercase state code
@@ -73,12 +74,15 @@ Both first level keys have the same set of subkeys:
     - `absolute_value`: (optional) If True, negative values become positive after the transaction direction is applied. Use this when a source signs amounts by direction (negative for money leaving the filer) and `transaction_direction` already records that direction.
 - `column_order`: list of columns in the order they appear in the data format. If not provided, will default to the order in column_properties.
 - `duplicate_columns`:
-    - map of standard column names to list of additional columns that should be copies of them
+    - map of a standard column name the form produces (including one added by `state_code_columns`) to a list of standard names that should be copies of it. The copies are made after renaming, so an `enum_mapper` entry for a copy applies to it.
+- `new_empty_columns`:
+    - list of standard column names to add with every value null, for a table that needs the column but the state gives nothing for.
 - state_code_columns:
     - list of columns to add to table with each row containing the state code. If this data is mixed with other states, we'll want to be able to know that the data pertains to this state.
 - `enum_mapper`:
-    - keys are names of standardized column names and map to mappings of raw values to standard values for a given enum.
-    - if additional columns are generated during standardization that are enums, their names should be listed here as well. 
+    - keys are standard column names the form produces (from `column_details`, `duplicate_columns`, `state_code_columns` or `new_empty_columns`) and map to mappings of raw values to standard values.
+    - where `table.yaml` lists values for the column (`enum_columns`, for example `transactor_type`, `transactor_type_specific`, `party`, `transaction_type`, `office_sought`), every mapped value must be one of them; add a value to `table.yaml` if a state really needs a new one. A column with no listed values (a county name, say) may map to anything.
+    - raw values missing from the mapping become null and are reported (see [Checks when standardizing](#checks-when-standardizing)).
 - `table_name`: type of table represented. transaction, transactor, election, election_result, address, membership.
 - `overloaded_columns`:
     - map of raw column names to two maps 'filter' and 'pattern'. 
@@ -86,7 +90,7 @@ Both first level keys have the same set of subkeys:
         - `pattern` maps to a string regex pattern with named capture groups
     - overloaded columns is for cases where the raw data contains a column with multiple pieces of information jammed into a single column. This column must follow a consistent format. The splitting will only be attempted on those rows that contain one of the listed values for each of the listed columns. The named groups should be mapped to standard names in `column_details`. If the pattern is not a match, the new columns will be filled with NaNs.
 - `null_values`:
-  - map of column names to list of values that should be replaced with null.
+  - map of standard column names the form produces to a list of values that should be replaced with null.
   - For example, states sometimes have 0 amount transactions that should be null.
 - `filter`:
   - map of raw column names to either a list of the values to keep, or a `NOT` key mapping to a list of the values to drop. Use it for rows the state marks as superseded (Texas keeps only `infoOnlyFlag: ["N"]`), not for the payer's copy of a transfer between filers: linkage pairs those copies through `reported_by` and `Transaction_deduplicated` (Minnesota's `Type: NOT: [Contribution]` predates that and is kept for now).
@@ -127,5 +131,26 @@ This configuration allows the `standardize_states` function to filter data by ye
 
 ### Special Cases
 
-If the provided options in the provided configuration files do not allow the state's details to be captured, you will need to write a custom python code. This should be done by writing a subclass of `DataSourceStandardizationPipeline` or one of its component classes. This code should be added to `utils.standardization.finance` in a file with the states full, lowercased name. The class should be given a `@register_special_pipeline(state='il', form_code='some_form')` decorator where the configuration should be present in the `il.yaml` (or whatever the state's code is) config file under the `some_form` (or whatever you name the form) block. 
+If the configuration keys can't express what a state needs, a form can be backed by Python. Subclass `DataSourceStandardizationPipeline` (or give it a custom `DataReader`, `SchemaTransformer` or `DataStandardizer`) in `src/utils/standardize/finance/<state code>.py`, for example `il.py`, and decorate the class:
+
+```python
+from utils.standardize.source import DataSourceStandardizationPipeline
+from utils.standardize.source_standardization_registry import register_special_data_source
+
+
+@register_special_data_source("il", form_code="some_form")
+class IllinoisSomeForm(DataSourceStandardizationPipeline):
+    ...
+```
+
+The form still has its block in `il.yaml` under `some_form`, and is validated like any other; the decorator makes an instance of the class with that state and form code, and registers it before the config-only pipelines, so it replaces the one the config alone would have made. Modules whose names start with an underscore are not imported as states. Before writing Python, check whether a config feature would serve every state (open an issue for it): the five existing states need none.
+
+### Definition of done for a new state
+
+- `cft collect -s <code>` fetches the state's files, raises if it can't, and logs each download; the module docstring says where the data comes from.
+- `<code>.yaml` has a form for every file layout; every form loads (the config checks pass) and the only `coerced_values.csv` rows are values that really have no mapping.
+- Synthetic fixtures under `tests/data/standardize/raw/<code>/` cover every form, with a script that made them, and `tests/test_state_configs.py` passes for the state.
+- `tests/test_state_golden_rows.py` has a row per form checking who paid whom, the amount, the date and the type, including a reversed row if the state uses `transaction_direction`.
+- Every Transaction form sets `reported_by`; the config comments say what the state's amendment or superseded markers mean and what was done about them (see the Texas and Pennsylvania configs).
+- `cft standardize`, `normalize` and `clean` run on the real data, and the row counts and totals were compared with a figure the state publishes.
 
