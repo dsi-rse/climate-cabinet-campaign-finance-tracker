@@ -98,7 +98,10 @@ legacy_download_contributions_or_receipts:
       description: "Donor first name"
     - raw_name: "l_name_or_org"
       type: str
-      standard_name: donor--full_name
+      # a person's last name, or an organization's name; clean moves a last
+      # name with no first name beside it to full_name
+      standard_name: donor--last_name
+      description: "Donor last name or organization name"
     - raw_name: "address"
       type: str
       standard_name: donor--address--line_1
@@ -227,7 +230,8 @@ legacy_download_expenditures:
       description: "Payee first name"
     - raw_name: "lname_or_org"
       type: str
-      standard_name: recipient--full_name
+      # as l_name_or_org above
+      standard_name: recipient--last_name
       description: "Payee last name or organization name"
     - raw_name: "address"
       type: str
