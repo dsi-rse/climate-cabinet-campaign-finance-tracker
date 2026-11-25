@@ -8,7 +8,8 @@ base:
     header: 0
   state_code_columns:
     - reported_state
-  year_filter_filepath_regex: ".*\\/(\\d{4})\\/[^\\/]+$"
+  # the year is the folder: 2024/contrib_2024.txt
+  year_filter_filepath_regex: "^(\\d{4})/"
 
 
 contributions:

@@ -2,6 +2,7 @@
 
 import argparse
 import logging
+import shutil
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -19,6 +20,9 @@ from utils.standardize.source import (
 )
 
 RAW_FIXTURE_DIRECTORY = Path(__file__).parent / "data" / "standardize" / "raw"
+CONFIG_DIRECTORY = (
+    Path(__file__).parents[1] / "src" / "utils" / "standardize" / "finance" / "config"
+)
 COLUMNS = ["ID", "NAME", "AMOUNT"]
 ROWS = ["1,Ann,10", "2,Bo,20", "3,Cy,30"]
 
@@ -362,10 +366,58 @@ def test_a_standard_name_supplied_by_another_raw_column_is_not_missing(
 
 
 def test_position_read_files_are_not_checked_for_missing_columns(tmp_path, caplog):
-    """Reading by position has its own header check (HeaderMismatchError)"""
-    config = write_form(tmp_path, {"header": 0})
+    """Reading by position has its own header check (HeaderMismatchError)
+
+    A form read by position may carry an inherited column that its own
+    column_order leaves out; that column is simply not read.
+    """
+    config = write_form(
+        tmp_path,
+        {"header": 0},
+        column_details=[
+            {"raw_name": "ID", "type": "str", "standard_name": "donor_id"},
+            {"raw_name": "NAME", "type": "str", "standard_name": "donor--full_name"},
+            {"raw_name": "AMOUNT", "type": "str", "standard_name": "amount"},
+            {"raw_name": "NOTE", "type": "str", "standard_name": "description"},
+        ],
+        column_order=["ID", "NAME", "AMOUNT"],
+    )
     with caplog.at_level(logging.WARNING, logger="utils.standardize.source"):
-        load(tmp_path, config, "ID,NAME,AMOUNT", "1,Ann,10")
+        _, table = load(tmp_path, config, "ID,NAME,AMOUNT", "1,Ann,10")
+    assert "description" not in table.columns
+    assert "has no column" not in caplog.text
+
+
+def test_columns_a_pattern_extracts_are_not_missing(tmp_path, caplog):
+    """overloaded_columns makes its columns after the read"""
+    config = write_form(
+        tmp_path,
+        {"header": 0},
+        include_column_order=False,
+        column_details=[
+            {"raw_name": "ID", "type": "str", "standard_name": "donor_id"},
+            {"raw_name": "NAME", "type": "str"},
+            {
+                "raw_name": "generated_first",
+                "type": "str",
+                "standard_name": "donor--first_name",
+            },
+            {
+                "raw_name": "generated_last",
+                "type": "str",
+                "standard_name": "donor--last_name",
+            },
+            {"raw_name": "AMOUNT", "type": "str", "standard_name": "amount"},
+        ],
+        overloaded_columns={
+            "NAME": {"pattern": r"^(?P<generated_first>\w+) (?P<generated_last>\w+)$"}
+        },
+    )
+    with caplog.at_level(logging.WARNING, logger="utils.standardize.source"):
+        _, table = load(tmp_path, config, "ID,NAME,AMOUNT", "1,Ann Lee,10")
+    assert table[["donor--first_name", "donor--last_name"]].to_numpy().tolist() == [
+        ["Ann", "Lee"]
+    ]
     assert "has no column" not in caplog.text
 
 
@@ -407,9 +459,10 @@ def test_a_file_with_no_year_in_its_path_is_read_unless_a_range_was_asked_for(
 
 
 def test_standardize_state_rejects_a_state_with_no_config():
+    states = ", ".join(sorted(p.stem for p in CONFIG_DIRECTORY.glob("*.yaml")))
     with pytest.raises(
         ValueError,
-        match="No standardize config for state 'qq'. States with a config: az, mi, mn, pa, tx",
+        match=f"No standardize config for state 'qq'. States with a config: {states}",
     ):
         standardize_state("qq", input_directory=RAW_FIXTURE_DIRECTORY)
 
@@ -417,3 +470,73 @@ def test_standardize_state_rejects_a_state_with_no_config():
 def test_standardize_state_takes_the_code_in_any_case():
     database, _ = standardize_state("TX", input_directory=RAW_FIXTURE_DIRECTORY)
     assert set(database["Transaction"]["reported_state"]) == {"tx"}
+
+
+def test_shipped_fixtures_standardize_without_warnings(caplog):
+    """The warnings about files, columns and years stay quiet on the five states"""
+    with caplog.at_level(logging.WARNING, logger="utils.standardize.source"):
+        for state in sorted(p.name for p in RAW_FIXTURE_DIRECTORY.iterdir()):
+            standardize_state(state, input_directory=RAW_FIXTURE_DIRECTORY)
+    noise = [
+        line
+        for line in caplog.text.splitlines()
+        if "no file under" in line or "has no column" in line or "gives no year" in line
+    ]
+    assert noise == []
+
+
+@pytest.mark.parametrize(
+    ("state", "year", "folder"),
+    [("pa", 2024, "2024/"), ("mi", 2022, "LegacyDownloads/2022/")],
+)
+def test_a_year_range_keeps_the_files_of_that_year(state, year, folder):
+    """The shipped year regexes find the year in the path inside the state folder"""
+    whole, _ = standardize_state(state, input_directory=RAW_FIXTURE_DIRECTORY)
+    ranged, _ = standardize_state(
+        state, start_year=year, end_year=year, input_directory=RAW_FIXTURE_DIRECTORY
+    )
+    for table in whole:
+        if "source_file" in whole[table]:
+            in_year = whole[table]["source_file"].str.startswith(folder)
+            assert len(ranged[table]) == in_year.sum() > 0, table
+        else:
+            # Transactor rows carry no file; the fixture has several years
+            assert 0 < len(ranged[table]) <= len(whole[table]), table
+
+
+def test_standardize_state_finds_the_raw_folder_in_any_case(tmp_path):
+    shutil.copytree(RAW_FIXTURE_DIRECTORY / "tx", tmp_path / "TX")
+    database, _ = standardize_state("tx", input_directory=tmp_path)
+    assert len(database["Transaction"]) > 0
+
+
+def test_standardize_state_refuses_a_missing_raw_folder(tmp_path):
+    (tmp_path / "mi").mkdir()
+    with pytest.raises(
+        ValueError, match="No raw data folder for 'tx' under .* \\(folders there: mi\\)"
+    ):
+        standardize_state("tx", input_directory=tmp_path)
+
+
+def test_an_optional_column_a_file_lacks_does_not_warn(tmp_path, caplog):
+    """The config says some files lack the column, so the run need not"""
+    config = write_form(
+        tmp_path,
+        {"header": 0},
+        include_column_order=False,
+        column_details=[
+            {"raw_name": "ID", "type": "str", "standard_name": "donor_id"},
+            {"raw_name": "NAME", "type": "str", "standard_name": "donor--full_name"},
+            {"raw_name": "AMOUNT", "type": "str", "standard_name": "amount"},
+            {
+                "raw_name": "NOTE",
+                "type": "str",
+                "standard_name": "description",
+                "optional": True,
+            },
+        ],
+    )
+    with caplog.at_level(logging.WARNING, logger="utils.standardize.source"):
+        _, table = load(tmp_path, config, "ID,NAME,AMOUNT", "1,Ann,10")
+    assert "description" not in table.columns
+    assert "has no column" not in caplog.text

@@ -38,7 +38,8 @@ def standardize_state(
         distinct raw value, with how many times that value occurred.
 
     Raises:
-        ValueError: if no config exists for the state
+        ValueError: if no config exists for the state, or input_directory has
+            no folder for it
         ConfigError: if a form in the state's config fails its checks
         HeaderMismatchError: if a file's columns are not the ones its form
             reads by position
@@ -53,13 +54,18 @@ def standardize_state(
             f" {', '.join(known)}. To add one, see CONTRIBUTING.md."
         )
 
+    state_directory = (
+        _state_directory(input_directory, state)
+        if input_directory is not None
+        else None
+    )
     database = {}
     coerced_value_tables = []
     for source in all_data_source_pipelines[state]:
         standardized_source_table = source.load_and_standardize_data_source(
             start_year=start_year,
             end_year=end_year,
-            state_data_directory=input_directory / state,
+            state_data_directory=state_directory,
         )
         if source.table_name not in database:
             database[source.table_name] = pd.DataFrame()
@@ -81,3 +87,46 @@ def standardize_state(
         else pd.DataFrame(columns=COERCED_VALUE_REPORT_COLUMNS)
     )
     return database, coerced_values
+
+
+def _state_directory(input_directory: Path, state: str) -> Path:
+    """The state's folder under the raw directory, whatever its case
+
+    Args:
+        input_directory: The raw data directory, with one folder per state.
+        state: Lowercase state code.
+
+    Returns:
+        The folder named for the state, matched ignoring case.
+
+    Raises:
+        ValueError: if there is no such folder, naming the ones there are.
+    """
+    exact = input_directory / state
+    if exact.is_dir():
+        return exact
+    matches = (
+        [
+            path
+            for path in input_directory.iterdir()
+            if path.is_dir() and path.name.lower() == state
+        ]
+        if input_directory.is_dir()
+        else []
+    )
+    if matches:
+        return matches[0]
+    folders = (
+        sorted(
+            path.name
+            for path in input_directory.iterdir()
+            if path.is_dir() and not path.name.startswith(("_", "."))
+        )
+        if input_directory.is_dir()
+        else []
+    )
+    raise ValueError(
+        f"No raw data folder for {state!r} under {input_directory}"
+        f" (folders there: {', '.join(folders) or 'none'}). Run collect for the"
+        " state, or give --input-directory."
+    )

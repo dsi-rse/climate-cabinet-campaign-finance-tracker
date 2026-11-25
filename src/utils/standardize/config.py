@@ -38,7 +38,7 @@ FORM_KEYS = frozenset(
     }
 )
 # Every key a column_details entry may have. description and notes are for
-# the reader only
+# the reader only; optional says a file read by header may lack the column
 COLUMN_KEYS = frozenset(
     {
         "raw_name",
@@ -47,6 +47,7 @@ COLUMN_KEYS = frozenset(
         "date_format",
         "post_load_float",
         "absolute_value",
+        "optional",
         "description",
         "notes",
     }
@@ -310,6 +311,17 @@ class ConfigHandler:
         ]
 
     @property
+    def optional_columns(self) -> frozenset[str]:
+        """Raw names of columns a file may lack without a warning
+
+        For a form read by header, a column that only some files have (say
+        why in a comment). Reading by position checks the header instead.
+        """
+        return frozenset(
+            col["raw_name"] for col in self._column_details if col.get("optional")
+        )
+
+    @property
     def raw_column_order(self) -> list[str]:
         """List of columns in order in raw file"""
         return self._column_order
@@ -526,6 +538,8 @@ def validate_form_config(
                 f"column {raw_name!r}: type {column['type']!r} is not a pandas dtype"
                 " (str, Int64, Float64, ...)"
             )
+        if not isinstance(column.get("optional", False), bool):
+            problems.append(f"column {raw_name!r}: optional must be true or false")
         standard_name = column.get("standard_name")
         if standard_name is None:
             for key in _KEYS_NEEDING_STANDARD_NAME:

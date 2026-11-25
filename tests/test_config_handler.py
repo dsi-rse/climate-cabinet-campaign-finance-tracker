@@ -596,6 +596,12 @@ def set_in(config, *path_and_value):
             "reported_by must be one of donor, recipient, not 'payer'",
         ),
         (
+            lambda c: set_in(
+                c, "contributions", "column_details", 3, "optional", "yes"
+            ),
+            "column 'AMT': optional must be true or false",
+        ),
+        (
             lambda c: set_in(c, "contributions", "column_details", 3, "type", "Int3"),
             "type 'Int3' is not a pandas dtype",
         ),

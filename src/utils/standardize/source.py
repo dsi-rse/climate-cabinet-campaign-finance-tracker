@@ -164,8 +164,19 @@ class DataReader:
         self._dtype_dict = config_handler.dtype_dict
         self.read_csv_params = config_handler.read_csv_params
         self.columns = config_handler.raw_column_order
-        # raw name -> standard name, to notice a mapped column a file lacks
-        self.column_mapper = config_handler.column_mapper
+        # raw name -> standard name, to notice a mapped column a file lacks;
+        # columns an overloaded_columns pattern makes after the read, and
+        # columns the config marks optional, don't count
+        generated = {
+            group
+            for info in config_handler.overloaded_columns.values()
+            for group in re.compile(info["pattern"]).groupindex
+        }
+        self.column_mapper = {
+            raw: standard
+            for raw, standard in config_handler.column_mapper.items()
+            if raw not in generated and raw not in config_handler.optional_columns
+        }
         if config_handler.year_filter_filepath_regex:
             self.year_filter_filepath_regex = re.compile(
                 config_handler.year_filter_filepath_regex
@@ -236,7 +247,9 @@ class DataReader:
         leave its standard column out of the output. A standard name is only
         missing if no present raw column supplies it (a form that inherits
         another's columns may map the same standard name from two raw names,
-        one per file layout).
+        one per file layout). Columns an overloaded_columns pattern extracts
+        are made after the read, and columns marked optional in the config may
+        be absent, so neither is expected in the file.
 
         Args:
             table: The file as read.

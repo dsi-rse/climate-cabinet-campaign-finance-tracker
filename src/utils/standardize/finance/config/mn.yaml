@@ -261,11 +261,13 @@ expenditures:
     - raw_name: Vendor address 1
       type: str
       standard_name: recipient--address--line_1
+      optional: true
 
     # only in files downloaded before 2026
     - raw_name: Vendor address 2
       type: str
       standard_name: recipient--address--line_2
+      optional: true
       
     - raw_name: Vendor city
       type: str
@@ -382,6 +384,13 @@ independent_expenditures:
       Against: negative
 
   column_details:
+    # inherited from expenditures: this file names the affected committee
+    # (affected_party_id below) and has no column for the vendor's id
+    - raw_name: Affected committee reg num
+      type: Int32
+      standard_name: recipient_id
+      optional: true
+
     - raw_name: "Spender"
       type: str
       standard_name: donor--full_name
