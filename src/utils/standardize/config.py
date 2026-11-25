@@ -59,8 +59,10 @@ _KEYS_NEEDING_STANDARD_NAME = ("date_format", "post_load_float", "absolute_value
 # Organization (see DataStandardizer)
 TRANSACTION_DIRECTION = "transaction_direction"
 ORGANIZATION_NAME = "organization_name"
-# the only value transaction_direction's mapping may produce
-TRANSACTION_DIRECTION_VALUES = ("reverse",)
+# the value of transaction_direction that swaps a row's donor and recipient,
+# and the only value its mapping may produce
+REVERSED = "reverse"
+TRANSACTION_DIRECTION_VALUES = (REVERSED,)
 # a repeated column, such as amount-2, ends with a dash and a number. Only an
 # unprefixed name can repeat: normalize unstacks amount-2 but not
 # donor--address--city-2
@@ -112,15 +114,10 @@ def resolve_standard_name(table_name: str, standard_name: str) -> tuple[str, str
             )
         base_name = _REPEATED_COLUMN_SUFFIX.sub("", standard_name)
     *prefixes, attribute = base_name.split(SPLIT)
-    current = table_name
-    for prefix in prefixes:
-        relations = schema[current].relations
-        if prefix not in relations:
-            raise ConfigError(
-                f"{standard_name!r}: {prefix!r} is not a relation of {current}"
-                f" (its relations are {', '.join(sorted(relations)) or 'none'})"
-            )
-        current = relations[prefix]
+    try:
+        current = default_schema().related_table(table_name, prefixes)
+    except KeyError as error:
+        raise ConfigError(f"{standard_name!r}: {error.args[0]}") from error
     if attribute == ORGANIZATION_NAME and "full_name" in schema[current].attributes:
         return current, "full_name"
     if prefixes and attribute == "id":
@@ -347,6 +344,11 @@ class ConfigHandler:
             config_file_path: Path to configuration file
             state_code: two letter abbreviation of state with config
                 file in default config folder
+
+        Raises:
+            KeyError: if form_code is not in the file.
+            ConfigError: if the form's inherits chain is broken, or the resolved
+                form fails the checks in validate_form_config.
         """
         if config_file_path is None:
             if state_code is not None:

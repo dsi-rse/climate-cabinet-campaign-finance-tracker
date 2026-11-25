@@ -75,18 +75,29 @@ class Normalizer:
         self.schema = schema
         self._id_mapping = existing_id_mapping.copy() if existing_id_mapping else {}
 
-    def get_foreign_table_name(self, base_type: str, column_name: str) -> str:
-        """Retrieve the type of a multivalued/foreign table"""
-        column_tokens = column_name.split(SPLIT)
-        current_table_name = base_type
-        for column_token in column_tokens:
-            current_table_schema = self.schema.schema[current_table_name]
-            if column_token in current_table_schema.relations:
-                current_table_name = current_table_schema.relations[column_token]
-                continue
-            elif current_table_schema.attributes_regex.match(column_token):
-                return current_table_name
-        return current_table_name
+    def get_foreign_table_name(self, base_type: str, relation_path: str) -> str:
+        """The table a relation path (donor, donor--employer) leads to
+
+        Args:
+            base_type: The table the path starts from.
+            relation_path: Relation prefixes joined by SPLIT.
+
+        Returns:
+            The related table's name.
+
+        Raises:
+            ValueError: if a prefix is not a relation of the table it is applied
+                to. Standardize's config checks reject such a column, so this
+                means the standardized data was made by an older config.
+        """
+        try:
+            return self.schema.related_table(base_type, relation_path)
+        except KeyError as error:
+            raise ValueError(
+                f"Column prefix {relation_path!r} of {base_type} does not follow the"
+                f" schema's relations: {error.args[0]}. Re-run standardize with the"
+                " current config."
+            ) from error
 
     def _get_repeated_columns(self, table_columns: str) -> list[str]:
         r"""Given a list of columns and potentially repeating columns

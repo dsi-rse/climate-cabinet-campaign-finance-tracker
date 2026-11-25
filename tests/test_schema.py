@@ -1,8 +1,11 @@
+import re
+
 import pytest
 import yaml
 from utils.schema import (
     DataSchema,
     TableSchema,
+    default_schema,
 )
 
 
@@ -333,3 +336,42 @@ def test_missing_reverse_relation_name(sample_schemas, tmp_path):
     assert "reverse relation 'address' must have 'reverse_relation_name' field" in str(
         excinfo.value
     )
+
+
+@pytest.mark.parametrize(
+    ("table", "path", "expected"),
+    [
+        ("Transaction", "", "Transaction"),
+        ("Transaction", "donor", "Transactor"),
+        ("Transaction", "donor--address", "Address"),
+        ("Transaction", "donor--employer", "Membership"),
+        ("Transaction", "donor--employer--organization", "Transactor"),
+        (
+            "Transactor",
+            ["candidate", "member", "election_result", "election"],
+            "Election",
+        ),
+        ("Address", "transactor", "Transactor"),
+    ],
+)
+def test_related_table_follows_relations_under_single_table_inheritance(
+    table, path, expected
+):
+    assert default_schema().related_table(table, path) == expected
+
+
+@pytest.mark.parametrize(
+    ("table", "path", "message"),
+    [
+        (
+            "Transaction",
+            "adress",
+            "'adress' is not a relation of Transaction (its relations are affected_party, donor, recipient)",
+        ),
+        ("Transaction", "donor--adress", "'adress' is not a relation of Transactor"),
+        ("Donor", "", "'Donor' is not a table in the schema"),
+    ],
+)
+def test_related_table_names_the_table_and_its_relations(table, path, message):
+    with pytest.raises(KeyError, match=re.escape(message)):
+        default_schema().related_table(table, path)
