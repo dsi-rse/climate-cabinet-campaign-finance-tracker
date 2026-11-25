@@ -216,10 +216,12 @@ def train_splink(
                 term_frequency_adjustments=True
             ),
         ]
-        if (
-            "phone_number"
-            in con.execute(f"PRAGMA table_info('{table_name}')").fetchall()
-        ):
+        # PRAGMA table_info gives one row per column; the name is its second field
+        columns = {
+            row[1]
+            for row in con.execute(f"PRAGMA table_info('{table_name}')").fetchall()
+        }
+        if "phone_number" in columns:
             comparisons.append(cl.LevenshteinAtThresholds("phone_number", 1))
 
         settings = SettingsCreator(
