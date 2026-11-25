@@ -203,3 +203,27 @@ def test_u_estimation_is_seeded(con, tmp_path):
     with patch.object(LinkerTraining, "estimate_u_using_random_sampling", spy):
         train.train_splink(con, "transactors", tmp_path / "model.json")
     assert seeds == [train.TRAINING_SEED]
+
+
+def comparison_columns(model_path) -> list[str]:
+    settings = json.loads(model_path.read_text())
+    return [comparison["output_column_name"] for comparison in settings["comparisons"]]
+
+
+def test_phone_number_is_compared_when_the_table_has_it(con, tmp_path):
+    """The column check used to compare the name against whole table_info rows"""
+    con.execute("ALTER TABLE transactors ADD COLUMN phone_number VARCHAR")
+    # a few dozen distinct numbers, so some pairs agree
+    con.execute(
+        "UPDATE transactors SET phone_number ="
+        " '312555' || lpad(CAST(CAST(id AS INTEGER) % 40 AS VARCHAR), 4, '0')"
+    )
+    model = tmp_path / "model.json"
+    train.train_splink(con, "transactors", model)
+    assert "phone_number" in comparison_columns(model)
+
+
+def test_phone_number_is_not_compared_when_the_table_lacks_it(con, tmp_path):
+    model = tmp_path / "model.json"
+    train.train_splink(con, "transactors", model)
+    assert "phone_number" not in comparison_columns(model)
