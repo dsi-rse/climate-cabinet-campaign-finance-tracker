@@ -297,3 +297,123 @@ def test_cft_standardize_writes_the_report_where_normalize_will_not_load_it(tmp_
     # normalize loads every table file in the state folder, but not subfolders
     (loaded,) = load_database(tmp_path / "az", format="csv")
     assert "coerced_values" not in loaded
+
+
+# ---- what a run says about files and columns ----
+
+
+def load_files(tmp_path, config_path, files, **kwargs):
+    """Write raw files (relative path -> lines) and standardize them with the form"""
+    raw_directory = tmp_path / "raw"
+    for relative, lines in files.items():
+        path = raw_directory / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("\n".join(lines) + "\n")
+    pipeline = DataSourceStandardizationPipeline("zz", "form", config_file=config_path)
+    return pipeline.load_and_standardize_data_source(
+        state_data_directory=raw_directory, **kwargs
+    )
+
+
+def test_a_form_that_matches_no_file_warns(tmp_path, caplog):
+    config = write_form(tmp_path, {"header": 0}, path_pattern=r"^contributions.*\.csv$")
+    with caplog.at_level(logging.WARNING, logger="utils.standardize.source"):
+        table = load_files(
+            tmp_path, config, {"file.csv": ["ID,NAME,AMOUNT", "1,Ann,10"]}
+        )
+    assert table.empty
+    assert "zz form: no file under" in caplog.text
+    assert (
+        "matches path_pattern" in caplog.text
+        and "so the form contributes no rows" in caplog.text
+    )
+
+
+def test_a_header_read_file_missing_a_mapped_column_warns(tmp_path, caplog):
+    config = write_form(tmp_path, {"header": 0}, include_column_order=False)
+    with caplog.at_level(logging.WARNING, logger="utils.standardize.source"):
+        _, table = load(tmp_path, config, "ID,Name,AMOUNT", "1,Ann,10")
+    assert "donor--full_name" not in table.columns
+    assert (
+        "file.csv has no column 'NAME', so donor--full_name will be empty for this file"
+        in caplog.text
+    )
+
+
+def test_a_standard_name_supplied_by_another_raw_column_is_not_missing(
+    tmp_path, caplog
+):
+    """A form that inherits another's columns maps one name from two layouts"""
+    config = write_form(
+        tmp_path,
+        {"header": 0},
+        include_column_order=False,
+        column_details=[
+            {"raw_name": "ID", "type": "str", "standard_name": "donor_id"},
+            {"raw_name": "NAME", "type": "str", "standard_name": "donor--full_name"},
+            {"raw_name": "Spender", "type": "str", "standard_name": "donor--full_name"},
+            {"raw_name": "AMOUNT", "type": "str", "standard_name": "amount"},
+        ],
+    )
+    with caplog.at_level(logging.WARNING, logger="utils.standardize.source"):
+        _, table = load(tmp_path, config, "ID,Spender,AMOUNT", "1,Ann,10")
+    assert table["donor--full_name"].tolist() == ["Ann"]
+    assert "has no column" not in caplog.text
+
+
+def test_position_read_files_are_not_checked_for_missing_columns(tmp_path, caplog):
+    """Reading by position has its own header check (HeaderMismatchError)"""
+    config = write_form(tmp_path, {"header": 0})
+    with caplog.at_level(logging.WARNING, logger="utils.standardize.source"):
+        load(tmp_path, config, "ID,NAME,AMOUNT", "1,Ann,10")
+    assert "has no column" not in caplog.text
+
+
+YEAR_FILES = {
+    "2021/file.csv": ["ID,NAME,AMOUNT", "1,Ann,10"],
+    "2022/file.csv": ["ID,NAME,AMOUNT", "2,Bo,20"],
+}
+
+
+def test_year_regex_is_matched_against_the_path_inside_the_state_folder(tmp_path):
+    config = write_form(
+        tmp_path, {"header": 0}, year_filter_filepath_regex=r"^(\d{4})/"
+    )
+    table = load_files(tmp_path, config, YEAR_FILES, start_year=2022)
+    assert table["donor_id"].tolist() == ["2"]
+    table = load_files(tmp_path, config, YEAR_FILES)
+    assert sorted(table["donor_id"]) == ["1", "2"]
+
+
+def test_a_file_with_no_year_in_its_path_is_read_unless_a_range_was_asked_for(
+    tmp_path, caplog
+):
+    config = write_form(
+        tmp_path, {"header": 0}, year_filter_filepath_regex=r"^(\d{4})/"
+    )
+    files = {**YEAR_FILES, "other/file.csv": ["ID,NAME,AMOUNT", "3,Cy,30"]}
+    with caplog.at_level(logging.WARNING, logger="utils.standardize.source"):
+        table = load_files(tmp_path, config, files)
+    assert sorted(table["donor_id"]) == ["1", "2", "3"]
+    assert (
+        "other/file.csv: year_filter_filepath_regex" in caplog.text
+        and "gives no year for this path; the file is read" in caplog.text
+    )
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="utils.standardize.source"):
+        table = load_files(tmp_path, config, files, start_year=2021)
+    assert sorted(table["donor_id"]) == ["1", "2"]
+    assert "the file is skipped because a year range was asked for" in caplog.text
+
+
+def test_standardize_state_rejects_a_state_with_no_config():
+    with pytest.raises(
+        ValueError,
+        match="No standardize config for state 'qq'. States with a config: az, mi, mn, pa, tx",
+    ):
+        standardize_state("qq", input_directory=RAW_FIXTURE_DIRECTORY)
+
+
+def test_standardize_state_takes_the_code_in_any_case():
+    database, _ = standardize_state("TX", input_directory=RAW_FIXTURE_DIRECTORY)
+    assert set(database["Transaction"]["reported_state"]) == {"tx"}

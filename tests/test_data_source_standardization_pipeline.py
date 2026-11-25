@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import pytest
+from utils.constants import RAW_DATA_DIRECTORY
 from utils.standardize.config import ConfigHandler
 from utils.standardize.source import (
     DataReader,
@@ -470,8 +471,9 @@ def test_load_standardize_data_source(mock_pipeline, standardized_data):
     pd.testing.assert_frame_equal(result_df, standardized_data)
 
     # Ensure each step was called once with the correct arguments
+    # the state's raw folder goes along, for the year filter and messages
     mock_pipeline.data_reader.read_tabular_data.assert_called_once_with(
-        Path("contributions.csv"), None, None
+        Path("contributions.csv"), None, None, RAW_DATA_DIRECTORY / "NY"
     )
     mock_pipeline.schema_transformer.standardize_schema.assert_called_once()
     mock_pipeline.data_standardizer.standardize_data.assert_called_once()

@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from utils.constants import STATE_FINANCE_CONFIG_DIRECTORY
 from utils.standardize.source import COERCED_VALUE_REPORT_COLUMNS
 from utils.standardize.source_standardization_registry import (
     get_registered_sources,
@@ -37,11 +38,20 @@ def standardize_state(
         distinct raw value, with how many times that value occurred.
 
     Raises:
+        ValueError: if no config exists for the state
+        ConfigError: if a form in the state's config fails its checks
         HeaderMismatchError: if a file's columns are not the ones its form
             reads by position
     """
+    state = state.lower()
     register_all_data_source_pipelines(state)
     all_data_source_pipelines = get_registered_sources()
+    if state not in all_data_source_pipelines:
+        known = sorted(p.stem for p in STATE_FINANCE_CONFIG_DIRECTORY.glob("*.yaml"))
+        raise ValueError(
+            f"No standardize config for state {state!r}. States with a config:"
+            f" {', '.join(known)}. To add one, see CONTRIBUTING.md."
+        )
 
     database = {}
     coerced_value_tables = []
