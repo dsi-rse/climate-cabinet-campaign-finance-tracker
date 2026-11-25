@@ -1,9 +1,12 @@
-"""Registry of all state collection functions"""
+"""Registry of all state collection functions
 
-import importlib
+Collectors register themselves with register_special_state_collector when their
+module is imported; utils.collect imports every module under collect/finance
+and collect/election, so a new state's module is found by being there.
+"""
+
 import inspect
 from collections.abc import Callable
-from pathlib import Path
 
 # Maps of state abbreviation to tuple of function and list of arguments to pass to function
 _STATE_COLLECTOR_REGISTRY: dict[str, tuple[Callable[[], None]], list[str]] = {}
@@ -30,18 +33,6 @@ def get_state_collectors() -> dict[str, tuple[Callable[[], None], list[str]]]:
            to tuple of function and list of arguments to pass to function
     """
     return _STATE_COLLECTOR_REGISTRY
-
-
-def register_state_collectors(states: list[str]) -> None:
-    """Register all state collectors
-
-    Args:
-        states: List of state abbreviations
-    """
-    for p in Path(__file__).parent.rglob("*.py"):
-        if p.stem not in states:
-            continue
-        importlib.import_module(f"{__name__}.{p.stem}")
 
 
 def register_special_state_collector(

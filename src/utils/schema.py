@@ -273,6 +273,43 @@ class DataSchema:
         for table in self.schema:
             self.schema[table].inheritance_strategy = strategy
 
+    def related_table(self, table_name: str, relation_path: str | list[str]) -> str:
+        """Follow relation prefixes from a table to the table they lead to
+
+        A column such as donor--employer--role on Transaction names a path of
+        relations (donor, then employer) and an attribute of the table the
+        path lands on. This resolves the path: Transaction, donor ->
+        Transactor, employer -> Membership. Both normalize and the config
+        checks use it, so they agree on what a name means.
+
+        Args:
+            table_name: The table the path starts from.
+            relation_path: Relation prefixes joined by SPLIT (donor--employer),
+                or already split into a list. Empty means the table itself.
+
+        Returns:
+            The name of the table the path leads to.
+
+        Raises:
+            KeyError: if table_name is not a table, or a prefix is not a
+                relation of the table it is applied to. The message names the
+                table and its relations.
+        """
+        if isinstance(relation_path, str):
+            relation_path = relation_path.split(SPLIT) if relation_path else []
+        if table_name not in self.schema:
+            raise KeyError(f"{table_name!r} is not a table in the schema")
+        current = table_name
+        for prefix in relation_path:
+            relations = self.schema[current].relations
+            if prefix not in relations:
+                raise KeyError(
+                    f"{prefix!r} is not a relation of {current} (its relations are"
+                    f" {', '.join(sorted(relations)) or 'none'})"
+                )
+            current = relations[prefix]
+        return current
+
     def empty_database(self) -> dict[str, pd.DataFrame]:
         """Returns an empty database of the given schema"""
         return {table_name: pd.DataFrame() for table_name in self.schema.keys()}

@@ -12,7 +12,12 @@ from tqdm import tqdm
 
 from utils.constants import RAW_DATA_DIRECTORY
 from utils.schema import default_schema
-from utils.standardize.config import ConfigHandler
+from utils.standardize.config import (
+    ORGANIZATION_NAME,
+    REVERSED,
+    TRANSACTION_DIRECTION,
+    ConfigHandler,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +40,7 @@ _MAX_LISTED_HEADER_DIFFERENCES = 5
 
 # Enum columns whose mapping deliberately covers only some values. Their
 # unmapped values are expected to become null and are not reported.
-_PARTIAL_ENUM_COLUMNS = ("transaction_direction",)
+_PARTIAL_ENUM_COLUMNS = (TRANSACTION_DIRECTION,)
 COERCED_VALUE_COLUMNS = ["column", "step", "raw_value", "count"]
 COERCED_VALUE_REPORT_COLUMNS = ["state", "form", "file", *COERCED_VALUE_COLUMNS]
 
@@ -159,6 +164,19 @@ class DataReader:
         self._dtype_dict = config_handler.dtype_dict
         self.read_csv_params = config_handler.read_csv_params
         self.columns = config_handler.raw_column_order
+        # raw name -> standard name, to notice a mapped column a file lacks;
+        # columns an overloaded_columns pattern makes after the read, and
+        # columns the config marks optional, don't count
+        generated = {
+            group
+            for info in config_handler.overloaded_columns.values()
+            for group in re.compile(info["pattern"]).groupindex
+        }
+        self.column_mapper = {
+            raw: standard
+            for raw, standard in config_handler.column_mapper.items()
+            if raw not in generated and raw not in config_handler.optional_columns
+        }
         if config_handler.year_filter_filepath_regex:
             self.year_filter_filepath_regex = re.compile(
                 config_handler.year_filter_filepath_regex
@@ -173,26 +191,94 @@ class DataReader:
         path: Path,
         start_year: int | None = None,
         end_year: int | None = None,
+        state_data_directory: Path | None = None,
     ) -> bool:
-        """Filter file paths by year extracted from path"""
+        """Decide whether a file's year, read from its path, is in the range
+
+        The form's year_filter_filepath_regex is searched against the path
+        relative to the state's data directory (2021/contrib.txt), so a
+        pattern can anchor on the year's folder. A file whose path gives no
+        year is read when no range was asked for, and skipped when one was;
+        either way a warning says so, so a pattern that never matches is
+        noticed.
+
+        Args:
+            path: The raw file.
+            start_year: Earliest year wanted, or None.
+            end_year: Latest year wanted, or None.
+            state_data_directory: The state's raw folder the path is under.
+        """
         if not self.year_filter_filepath_regex:
             return True
-
-        match = self.year_filter_filepath_regex.search(str(path))
+        label = (
+            _file_label(Path(path), state_data_directory)
+            if state_data_directory is not None
+            else Path(path).as_posix()
+        )
+        match = self.year_filter_filepath_regex.search(label)
+        year = None
         if match:
             try:
                 year = int(match.group(1))
-                if (start_year is None or year >= start_year) and (
-                    end_year is None or year <= end_year
-                ):
-                    return True
-                else:
-                    return False
             except (ValueError, IndexError):
-                print(f"Error parsing year from path: {path}")
-                return False
-        else:
-            return False
+                year = None
+        if year is None:
+            wanted = start_year is not None or end_year is not None
+            logger.warning(
+                "%s: year_filter_filepath_regex %r gives no year for this path; %s",
+                label,
+                self.year_filter_filepath_regex.pattern,
+                "the file is skipped because a year range was asked for"
+                if wanted
+                else "the file is read",
+            )
+            return not wanted
+        return (start_year is None or year >= start_year) and (
+            end_year is None or year <= end_year
+        )
+
+    def _warn_about_missing_mapped_columns(
+        self, table: pd.DataFrame, path: str | Path, state_data_directory: Path | None
+    ) -> None:
+        """Say when a file read by header lacks a column the form maps
+
+        A form that reads by header (include_column_order: False) is not
+        checked against column_order, so a misspelled raw_name would just
+        leave its standard column out of the output. A standard name is only
+        missing if no present raw column supplies it (a form that inherits
+        another's columns may map the same standard name from two raw names,
+        one per file layout). Columns an overloaded_columns pattern extracts
+        are made after the read, and columns marked optional in the config may
+        be absent, so neither is expected in the file.
+
+        Args:
+            table: The file as read.
+            path: The raw file, for the message.
+            state_data_directory: The state's raw folder, for the message.
+        """
+        if self.read_csv_params.get("names") is not None:
+            return
+        present = set(table.columns)
+        supplied = {
+            standard for raw, standard in self.column_mapper.items() if raw in present
+        }
+        missing = {
+            raw: standard
+            for raw, standard in self.column_mapper.items()
+            if raw not in present and standard not in supplied
+        }
+        if missing:
+            label = (
+                _file_label(Path(path), state_data_directory)
+                if state_data_directory is not None
+                else Path(path).as_posix()
+            )
+            logger.warning(
+                "%s has no column %s, so %s will be empty for this file",
+                label,
+                ", ".join(repr(raw) for raw in sorted(missing)),
+                ", ".join(sorted(set(missing.values()))),
+            )
 
     def _filter_dataframe_to_year_range(
         self,
@@ -380,6 +466,7 @@ class DataReader:
         path: str | Path,
         start_year: int | None = None,
         end_year: int | None = None,
+        state_data_directory: Path | None = None,
     ) -> pd.DataFrame:
         """Read raw tabular data from state provided files into a DataFrame
 
@@ -387,6 +474,8 @@ class DataReader:
             path: Path to raw data file. If None, uses default_raw_data_paths
             start_year: Start year of elections to run pipeline on
             end_year: End year of elections to run pipeline on
+            state_data_directory: The state's raw folder, so the year filter
+                and messages can use the path relative to it
 
         This method should maintain the data as closely as possible. The only
         permissible modification is the dropping of segments of data that are
@@ -397,12 +486,15 @@ class DataReader:
             HeaderMismatchError: if the form reads columns by position and the
                 file's columns are not the ones it expects
         """
-        if not self._is_filepath_in_year_range(path, start_year, end_year):
+        if not self._is_filepath_in_year_range(
+            path, start_year, end_year, state_data_directory
+        ):
             return pd.DataFrame()
 
         self._check_header(path)
 
         table = self._read_csv_keeping_record_positions(path)
+        self._warn_about_missing_mapped_columns(table, path, state_data_directory)
         table = self._drop_blank_rows(table)
         table = self._filter_dataframe_to_year_range(table, start_year, end_year)
         table = self._filter_data(table)
@@ -701,9 +793,9 @@ class DataStandardizer:
         order, and the transaction_direction column is dropped once it has
         been applied.
         """
-        if "transaction_direction" not in standard_schema_table.columns:
+        if TRANSACTION_DIRECTION not in standard_schema_table.columns:
             return standard_schema_table
-        reverse_mask = standard_schema_table["transaction_direction"] == "reverse"
+        reverse_mask = standard_schema_table[TRANSACTION_DIRECTION] == REVERSED
         reverse_mask = reverse_mask.fillna(False).astype(bool)
 
         reverse_table = standard_schema_table.loc[reverse_mask, :].rename(
@@ -723,7 +815,7 @@ class DataStandardizer:
         standard_direction_table = standard_direction_table.iloc[
             np.argsort(original_positions, kind="stable")
         ]
-        return standard_direction_table.drop(columns="transaction_direction")
+        return standard_direction_table.drop(columns=TRANSACTION_DIRECTION)
 
     def _standardize_organization_name(
         self, standard_schema_table: pd.DataFrame
@@ -732,10 +824,10 @@ class DataStandardizer:
         organization_name_columns = [
             column
             for column in standard_schema_table.columns
-            if column.endswith("organization_name")
+            if column.endswith(ORGANIZATION_NAME)
         ]
         for column in organization_name_columns:
-            column_prefix = column[: -len("organization_name")]
+            column_prefix = column[: -len(ORGANIZATION_NAME)]
             organization_name_rows = standard_schema_table[column].notna()
             standard_schema_table.loc[
                 organization_name_rows, f"{column_prefix}full_name"
@@ -859,6 +951,10 @@ class DataSourceStandardizationPipeline:
                 provided, will use default logic with provided config
             data_standardizer: logic for standardizing data of the raw file. If
                 none provided, will use default logic with provided config.
+
+        Raises:
+            ConfigError: if the form's config fails the checks in
+                utils.standardize.config.validate_form_config.
         """
         self.state_code = state_code.lower()
         self.form_code = form_code
@@ -995,6 +1091,14 @@ class DataSourceStandardizationPipeline:
         coerced_value_tables = []
         self.coerced_values = pd.DataFrame(columns=COERCED_VALUE_REPORT_COLUMNS)
         if raw_data_file_paths == []:
+            logger.warning(
+                "%s %s: no file under %s matches path_pattern %r, so the form"
+                " contributes no rows",
+                self.state_code,
+                self.form_code,
+                state_data_directory,
+                self.config_handler.raw_data_path_pattern.pattern,
+            )
             return pd.DataFrame()
 
         progress_bar = tqdm(
@@ -1011,7 +1115,7 @@ class DataSourceStandardizationPipeline:
             progress_bar.set_description(f"Processing: {data_path.name}")
 
             raw_data_table = self.data_reader.read_tabular_data(
-                data_path, start_year, end_year
+                data_path, start_year, end_year, state_data_directory
             )
             if raw_data_table.empty:
                 continue

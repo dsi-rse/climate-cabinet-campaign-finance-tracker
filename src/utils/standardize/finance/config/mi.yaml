@@ -8,7 +8,8 @@ base:
   include_column_order: False
   state_code_columns:
     - reported_state
-  year_filter_filepath_regex: ".*\\/(\\d{4})\\/[^\\/]+$"
+  # the year is the folder: LegacyDownloads/2024/2024_mi_cfr_contributions.csv
+  year_filter_filepath_regex: "^LegacyDownloads/(\\d{4})/"
 
 legacy_download_contributions_or_receipts:
   inherits: base

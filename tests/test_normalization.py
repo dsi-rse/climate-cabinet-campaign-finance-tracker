@@ -910,3 +910,25 @@ def test_normalize_database_combines_rows_keeping_first_non_null_values():
     assert pat["full_name"] == "Pat"
     assert pat["phone_number"] == "5551234567"
     assert pat["party"] == "Green"
+
+
+def test_foreign_table_follows_the_schema_relations():
+    normalizer = Normalizer({}, DataSchema(DEFAULT_SCHEMA_PATH))
+    assert normalizer.get_foreign_table_name("Transaction", "donor") == "Transactor"
+    assert (
+        normalizer.get_foreign_table_name("Transaction", "donor--employer")
+        == "Membership"
+    )
+    assert (
+        normalizer.get_foreign_table_name("Transactor", "treasurer--member")
+        == "Transactor"
+    )
+
+
+def test_a_column_prefix_outside_the_schema_stops_normalize():
+    """Such a column means the standardized data predates the config checks"""
+    normalizer = Normalizer({}, DataSchema(DEFAULT_SCHEMA_PATH))
+    with pytest.raises(
+        ValueError, match="'adress' is not a relation of Transactor.*Re-run standardize"
+    ):
+        normalizer.get_foreign_table_name("Transaction", "donor--adress")
