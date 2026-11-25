@@ -9,28 +9,26 @@ base:
   state_code_columns:
     - reported_state
   year_filter_filepath_regex: ".*\\/(\\d{4})\\/[^\\/]+$"
+
+
+contributions:
+  inherits: base
+  table_name: Transaction
+  # a zero amount or date means the slot (each row holds up to three
+  # contributions) is unused
   null_values:
-    amount: 
+    amount-1:
       - 0.0
-    amount-1: 
+    amount-2:
       - 0.0
-    amount-2: 
+    amount-3:
       - 0.0
-    amount-3: 
-      - 0.0
-    date:
-      - 0
     date-1:
       - 0
     date-2:
       - 0
     date-3:
       - 0
-
-
-contributions:
-  inherits: base
-  table_name: Transaction
   # filed by the committee that received the money
   reported_by: recipient
   column_details:
@@ -259,8 +257,7 @@ filer:
     - raw_name: FILERTYPE
       type: str
       standard_name: transactor_type
-      enum: transactor_type
-      notes: "TODO: enum?"
+      notes: "enum; TODO: enum?"
 
     - raw_name: FILERNAME
       type: str
@@ -269,7 +266,7 @@ filer:
     - raw_name: OFFICE
       type: str
       standard_name: election_result--election--office_sought
-      enum: office_sought
+      notes: enum office_sought
 
     - raw_name: DISTRICT
       type: str
@@ -356,6 +353,11 @@ filer_2002:
 expense:
   inherits: base
   table_name: Transaction
+  null_values:
+    amount:
+      - 0.0
+    date:
+      - 0
   # filed by the committee that paid
   reported_by: donor
   path_pattern: "(?i)^((?!2002)\\d{4})/expense.*\\.txt$"

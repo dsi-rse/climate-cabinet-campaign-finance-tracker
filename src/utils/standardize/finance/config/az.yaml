@@ -188,102 +188,6 @@ base:
       "285": "expense"  # In-Kind Contribution to Corps and LLCs
       "286": "expense"  # In-Kind Contribution to Labor Orgs
 
-    transactor_type:
-      # EntityTypeID: EntityTypeName -> standard_name
-      "1": "Individual"  # Individual
-      "2": "Organization"  # Legacy Names Claimed as Committees
-      "3": "Organization"  # Business
-      "4": "Individual"  # Qualifying (Clean Elections $5 contributors)
-      "6": "Organization"  # Names used by Committees
-      "10": "Organization"  # Candidate (not participating in Clean Elections)
-      "11": "Organization"  # Candidate (participating in Clean Elections)
-      "12": "Organization"  # Candidate (Exploratory)
-      "13": "Organization"  # $500 Threshold (Candidate)
-      "15": "Organization"  # Support/Oppose (Candidate)
-      "16": "Organization"  # Independent Exp. (Standing) (Multicandidate PAC)
-      "20": "Organization"  # Segregated Fund (Multicandidate PAC)
-      "22": "Organization"  # Segregated Fund (Standing) (Multicandidate PAC)
-      "29": "Organization"  # Political Party
-      "30": "Organization"  # Political Party (Standing)
-      "32": "Organization"  # New Party
-      "33": "Organization"  # Political Action Committee (Legacy)
-      "35": "Organization"  # Non-Arizona Committee
-      "37": "Organization"  # Independent Expenditures (Corp/LLC/Labor Org)
-      "38": "Individual"  # Independent Expenditures (Individual)
-      "39": "Organization"  # Political Action Committee
-      "40": "Organization"  # Political Action Committee (Standing)
-      "41": "Organization"  # Political Action Committee (Mega)
-      "42": "Organization"  # Political Action Committee (Mega Standing)
-      "44": "Organization"  # Business Vendor
-      "45": "Organization"  # Corps/LLCs as Contributors
-      "46": "Organization"  # Labor Orgs as Contributors
-      "47": "Organization"  # Non-Arizona Candidate Committee
-      "48": "Organization"  # Non-Arizona PAC
-      "49": "Organization"  # Non-Arizona Party
-
-    transactor_type_specific:
-      # EntityTypeID: EntityTypeName -> standard_name
-      "1": "Individual"  # Individual
-      "2": "Committee"  # Legacy Names Claimed as Committees
-      "3": "Company"  # Business
-      "4": "Individual"  # Qualifying (Clean Elections $5 contributors)
-      "6": "Committee"  # Names used by Committees
-      "10": "Candidate Committee"  # Candidate (not participating in Clean Elections)
-      "11": "Candidate Committee"  # Candidate (participating in Clean Elections)
-      "12": "Candidate Committee"  # Candidate (Exploratory)
-      "13": "Candidate Committee"  # $500 Threshold (Candidate)
-      "14": "Other"  # $500 Threshold (Non-Candidate)
-      "15": "Candidate Committee"  # Support/Oppose (Candidate)
-      "16": "Committee"  # Independent Exp. (Standing) (Multicandidate PAC)
-      "17": "Other"  # Support/Oppose (Ballot Measure)
-      "18": "Other"  # Recall
-      "19": "Other"  # Segregated Fund
-      "20": "Committee"  # Segregated Fund (Multicandidate PAC)
-      "21": "Other"  # Segregated Fund (Standing)
-      "22": "Committee"  # Segregated Fund (Standing) (Multicandidate PAC)
-      "23": "Other"  # Independent Expenditures
-      "24": "Other"  # Independent Expenditures (Multicandidate PAC)
-      "25": "Other"  # Independent Expenditures (Standing)
-      "27": "Other"  # Political Organization
-      "28": "Other"  # Political Organization (Standing)
-      "29": "Party"  # Political Party
-      "30": "Party"  # Political Party (Standing)
-      "31": "Other"  # Officeholder Expenses
-      "32": "Party"  # New Party
-      "33": "Committee"  # Political Action Committee (Legacy)
-      "35": "Committee"  # Non-Arizona Committee
-      "36": "Other"  # Support/Oppose (Special Election Ballot Measure)
-      "37": "Company"  # Independent Expenditures (Corp/LLC/Labor Org)
-      "38": "Individual"  # Independent Expenditures (Individual)
-      "39": "Committee"  # Political Action Committee
-      "40": "Committee"  # Political Action Committee (Standing)
-      "41": "Committee"  # Political Action Committee (Mega)
-      "42": "Committee"  # Political Action Committee (Mega Standing)
-      "43": "Other"  # Partnership
-      "44": "Company"  # Business Vendor
-      "45": "Company"  # Corps/LLCs as Contributors
-      "46": "Other"  # Labor Orgs as Contributors
-      "47": "Candidate"  # Non-Arizona Candidate Committee
-      "48": "Committee"  # Non-Arizona PAC
-      "49": "Party"  # Non-Arizona Party
-
-    address--county:
-      "1": "Apache"
-      "2": "Cochise"
-      "3": "Coconino"
-      "4": "Gila"
-      "5": "Graham"
-      "6": "Greenlee"
-      "7": "La Paz"
-      "8": "Maricopa"
-      "9": "Mohave"
-      "10": "Navajo"
-      "11": "Pima"
-      "12": "Pinal"
-      "13": "Santa Cruz"
-      "14": "Yavapai"
-      "15": "Yuma"
-
     # Which party paid. Each file lists transactions from the filing committee's
     # side, mapping the committee to recipient. Types where money leaves the
     # committee (expenses, refunds it pays, loans it makes, payments on its
@@ -1114,6 +1018,105 @@ mdb_names:
   duplicate_columns:
     transactor_type_specific:
       - transactor_type
+
+  # EntityTypeID codes (transactor_type_specific is copied to transactor_type
+  # above, then both are mapped) and county codes
+  enum_mapper:
+    transactor_type:
+      # EntityTypeID: EntityTypeName -> standard_name
+      "1": "Individual"  # Individual
+      "2": "Organization"  # Legacy Names Claimed as Committees
+      "3": "Organization"  # Business
+      "4": "Individual"  # Qualifying (Clean Elections $5 contributors)
+      "6": "Organization"  # Names used by Committees
+      "10": "Organization"  # Candidate (not participating in Clean Elections)
+      "11": "Organization"  # Candidate (participating in Clean Elections)
+      "12": "Organization"  # Candidate (Exploratory)
+      "13": "Organization"  # $500 Threshold (Candidate)
+      "15": "Organization"  # Support/Oppose (Candidate)
+      "16": "Organization"  # Independent Exp. (Standing) (Multicandidate PAC)
+      "20": "Organization"  # Segregated Fund (Multicandidate PAC)
+      "22": "Organization"  # Segregated Fund (Standing) (Multicandidate PAC)
+      "29": "Organization"  # Political Party
+      "30": "Organization"  # Political Party (Standing)
+      "32": "Organization"  # New Party
+      "33": "Organization"  # Political Action Committee (Legacy)
+      "35": "Organization"  # Non-Arizona Committee
+      "37": "Organization"  # Independent Expenditures (Corp/LLC/Labor Org)
+      "38": "Individual"  # Independent Expenditures (Individual)
+      "39": "Organization"  # Political Action Committee
+      "40": "Organization"  # Political Action Committee (Standing)
+      "41": "Organization"  # Political Action Committee (Mega)
+      "42": "Organization"  # Political Action Committee (Mega Standing)
+      "44": "Organization"  # Business Vendor
+      "45": "Organization"  # Corps/LLCs as Contributors
+      "46": "Organization"  # Labor Orgs as Contributors
+      "47": "Organization"  # Non-Arizona Candidate Committee
+      "48": "Organization"  # Non-Arizona PAC
+      "49": "Organization"  # Non-Arizona Party
+
+    transactor_type_specific:
+      # EntityTypeID: EntityTypeName -> standard_name
+      "1": "Individual"  # Individual
+      "2": "Committee"  # Legacy Names Claimed as Committees
+      "3": "Company"  # Business
+      "4": "Individual"  # Qualifying (Clean Elections $5 contributors)
+      "6": "Committee"  # Names used by Committees
+      "10": "Candidate Committee"  # Candidate (not participating in Clean Elections)
+      "11": "Candidate Committee"  # Candidate (participating in Clean Elections)
+      "12": "Candidate Committee"  # Candidate (Exploratory)
+      "13": "Candidate Committee"  # $500 Threshold (Candidate)
+      "14": "Other"  # $500 Threshold (Non-Candidate)
+      "15": "Candidate Committee"  # Support/Oppose (Candidate)
+      "16": "Committee"  # Independent Exp. (Standing) (Multicandidate PAC)
+      "17": "Other"  # Support/Oppose (Ballot Measure)
+      "18": "Other"  # Recall
+      "19": "Other"  # Segregated Fund
+      "20": "Committee"  # Segregated Fund (Multicandidate PAC)
+      "21": "Other"  # Segregated Fund (Standing)
+      "22": "Committee"  # Segregated Fund (Standing) (Multicandidate PAC)
+      "23": "Other"  # Independent Expenditures
+      "24": "Other"  # Independent Expenditures (Multicandidate PAC)
+      "25": "Other"  # Independent Expenditures (Standing)
+      "27": "Other"  # Political Organization
+      "28": "Other"  # Political Organization (Standing)
+      "29": "Party"  # Political Party
+      "30": "Party"  # Political Party (Standing)
+      "31": "Other"  # Officeholder Expenses
+      "32": "Party"  # New Party
+      "33": "Committee"  # Political Action Committee (Legacy)
+      "35": "Committee"  # Non-Arizona Committee
+      "36": "Other"  # Support/Oppose (Special Election Ballot Measure)
+      "37": "Company"  # Independent Expenditures (Corp/LLC/Labor Org)
+      "38": "Individual"  # Independent Expenditures (Individual)
+      "39": "Committee"  # Political Action Committee
+      "40": "Committee"  # Political Action Committee (Standing)
+      "41": "Committee"  # Political Action Committee (Mega)
+      "42": "Committee"  # Political Action Committee (Mega Standing)
+      "43": "Other"  # Partnership
+      "44": "Company"  # Business Vendor
+      "45": "Company"  # Corps/LLCs as Contributors
+      "46": "Other"  # Labor Orgs as Contributors
+      "47": "Candidate"  # Non-Arizona Candidate Committee
+      "48": "Committee"  # Non-Arizona PAC
+      "49": "Party"  # Non-Arizona Party
+
+    address--county:
+      "1": "Apache"
+      "2": "Cochise"
+      "3": "Coconino"
+      "4": "Gila"
+      "5": "Graham"
+      "6": "Greenlee"
+      "7": "La Paz"
+      "8": "Maricopa"
+      "9": "Mohave"
+      "10": "Navajo"
+      "11": "Pima"
+      "12": "Pinal"
+      "13": "Santa Cruz"
+      "14": "Yavapai"
+      "15": "Yuma"
 
   column_details:
     - raw_name: "NameID"
