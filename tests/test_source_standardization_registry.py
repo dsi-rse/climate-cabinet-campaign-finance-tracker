@@ -13,14 +13,16 @@ from utils.standardize.source_standardization_registry import (
 )
 
 FORM = {
+    "inherits": "base",
     "table_name": "Transaction",
     "path_pattern": ".*",
-    "state_code_columns": ["reported_state"],
     "column_details": [
         {"raw_name": "ID", "type": "str", "standard_name": "donor_id"},
         {"raw_name": "AMT", "type": "Float64", "standard_name": "amount"},
     ],
 }
+# the shape every state uses: a meta base, which gets no pipeline of its own
+BASE = {"meta": True, "state_code": "zz", "state_code_columns": ["reported_state"]}
 
 
 @pytest.fixture
@@ -36,7 +38,7 @@ def state_zz(tmp_path, monkeypatch):
     configs = tmp_path / "config"
     configs.mkdir()
     with (configs / "zz.yaml").open("w") as f:
-        yaml.safe_dump({"special": FORM, "plain": FORM}, f)
+        yaml.safe_dump({"base": BASE, "special": FORM, "plain": FORM}, f)
     package = tmp_path / "special_states"
     package.mkdir()
     (package / "__init__.py").write_text("")

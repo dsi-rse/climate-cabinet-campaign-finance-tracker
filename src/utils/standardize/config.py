@@ -1,18 +1,13 @@
 """Configuration hanlder class for state campaign finance data"""
 
 import re
-from functools import lru_cache
 from pathlib import Path
 
 import pandas as pd
 from yaml import safe_load
 
-from utils.constants import (
-    DEFAULT_SCHEMA_PATH,
-    SPLIT,
-    STATE_FINANCE_CONFIG_DIRECTORY,
-)
-from utils.schema import DataSchema
+from utils.constants import SPLIT, STATE_FINANCE_CONFIG_DIRECTORY
+from utils.schema import default_schema
 
 # Values of a Transaction form's reported_by: the party whose report the rows
 # come from (see table.yaml)
@@ -66,7 +61,9 @@ TRANSACTION_DIRECTION = "transaction_direction"
 ORGANIZATION_NAME = "organization_name"
 # the only value transaction_direction's mapping may produce
 TRANSACTION_DIRECTION_VALUES = ("reverse",)
-# a repeated column, such as amount-2, ends with a dash and a number
+# a repeated column, such as amount-2, ends with a dash and a number. Only an
+# unprefixed name can repeat: normalize unstacks amount-2 but not
+# donor--address--city-2
 _REPEATED_COLUMN_SUFFIX = re.compile(r"-\d+$")
 
 
@@ -76,12 +73,6 @@ class ConfigError(ValueError):
     The message lists every problem found in the form, one per line, with the
     file and form it was found in.
     """
-
-
-@lru_cache(maxsize=1)
-def _data_schema() -> DataSchema:
-    """The table schema standard names are checked against"""
-    return DataSchema(DEFAULT_SCHEMA_PATH)
 
 
 def resolve_standard_name(table_name: str, standard_name: str) -> tuple[str, str]:
@@ -108,10 +99,18 @@ def resolve_standard_name(table_name: str, standard_name: str) -> tuple[str, str
             is applied to, or the last part is not an attribute of the table
             it lands on.
     """
-    schema = _data_schema().schema
+    schema = default_schema().schema
     if table_name not in schema:
         raise ConfigError(f"{table_name!r} is not a table in table.yaml")
-    base_name = _REPEATED_COLUMN_SUFFIX.sub("", standard_name)
+    base_name = standard_name
+    if _REPEATED_COLUMN_SUFFIX.search(standard_name):
+        if SPLIT in standard_name:
+            raise ConfigError(
+                f"{standard_name!r}: only an attribute of the form's own table can"
+                f" repeat (amount-2); normalize does not unstack a repeat behind a"
+                f" {SPLIT} prefix"
+            )
+        base_name = _REPEATED_COLUMN_SUFFIX.sub("", standard_name)
     *prefixes, attribute = base_name.split(SPLIT)
     current = table_name
     for prefix in prefixes:
@@ -124,6 +123,11 @@ def resolve_standard_name(table_name: str, standard_name: str) -> tuple[str, str
         current = relations[prefix]
     if attribute == ORGANIZATION_NAME and "full_name" in schema[current].attributes:
         return current, "full_name"
+    if prefixes and attribute == "id":
+        raise ConfigError(
+            f"{standard_name!r}: a related record's id is named"
+            f" {SPLIT.join(prefixes)}_id, not {SPLIT.join(prefixes)}{SPLIT}id"
+        )
     if attribute in schema[current].attributes:
         return current, attribute
     if not prefixes and attribute == TRANSACTION_DIRECTION:
@@ -167,8 +171,8 @@ def resolve_inheritance(config: dict, form_code: str) -> dict:
         return child_config
     if parent_form_code not in config:
         raise KeyError(
-            "{inherits} not in config file. Avaialbe options are:"
-            f" {', '.join(child_config.keys())}"
+            f"{form_code} inherits {parent_form_code!r}, which is not in the config"
+            f" file. Its forms are: {', '.join(config)}"
         )
     if parent_form_code == form_code:
         raise RecursionError(f"Configuration {form_code} inherits from itself")
@@ -366,6 +370,7 @@ class ConfigHandler:
         if form_code not in config:
             raise KeyError(f"Form code '{form_code}' not found in configuration file.")
 
+        _check_inheritance(config, form_code, config_file_path)
         form_config = resolve_inheritance(config, form_code)
         validate_form_config(config, form_code, form_config, config_file_path)
 
@@ -443,27 +448,46 @@ def validate_form_config(
             problems.append(
                 f"{code}: raw_name repeated in column_details: {', '.join(map(str, repeated))}"
             )
-    is_meta = bool(form_config.get("meta"))
+    # meta is read from the form's own block: resolve_inheritance copies a
+    # base's meta into every form that inherits it
+    is_meta = bool((config.get(form_code) or {}).get("meta"))
+    only_inherited = " (if this block is only inherited from, set meta: True)"
     table_name = form_config.get("table_name")
-    schema = _data_schema().schema
+    schema = default_schema().schema
     if table_name is None and not is_meta:
-        problems.append("table_name is required (one of " + ", ".join(schema) + ")")
+        problems.append(
+            f"table_name is required (one of {', '.join(schema)}){only_inherited}"
+        )
     elif table_name is not None and table_name not in schema:
         problems.append(
             f"table_name {table_name!r} is not a table in table.yaml (one of"
-            f" {', '.join(schema)})"
+            f" {', '.join(schema)}; case matters)"
+        )
+        # the checks below need a real table; one message is enough
+        table_name = None
+    if form_config.get("state_code") is None and not is_meta:
+        problems.append(
+            "state_code is required: the state's two-letter code, which fills"
+            f" state_code_columns{only_inherited}"
         )
     if form_config.get("path_pattern") is None and not is_meta:
         problems.append(
             "path_pattern is required: the regex that picks the form's raw files"
+            + only_inherited
         )
     else:
         _check_regex(form_config.get("path_pattern"), "path_pattern", problems)
-    _check_regex(
-        form_config.get("year_filter_filepath_regex"),
-        "year_filter_filepath_regex",
-        problems,
-    )
+    year_regex = form_config.get("year_filter_filepath_regex")
+    _check_regex(year_regex, "year_filter_filepath_regex", problems)
+    if isinstance(year_regex, str):
+        try:
+            if re.compile(year_regex).groups < 1:
+                problems.append(
+                    f"year_filter_filepath_regex {year_regex!r} needs a capture group"
+                    " around the year; without one every file is skipped"
+                )
+        except re.error:
+            pass
     if not isinstance(form_config.get("read_csv_params", {}), dict):
         problems.append(
             "read_csv_params must be a mapping of read_csv keyword arguments"
@@ -537,7 +561,7 @@ def validate_form_config(
                 f"reported_by must be one of {', '.join(REPORTED_BY_VALUES)}, not"
                 f" {reported_by!r}"
             )
-        elif table_name != "Transaction":
+        elif table_name is not None and table_name != "Transaction":
             problems.append(
                 f"reported_by only applies to Transaction forms, not {table_name}"
             )
@@ -664,8 +688,43 @@ def validate_form_config(
         )
 
 
+def _check_inheritance(config: dict, form_code: str, config_file_path: Path) -> None:
+    """Stop with a clear message when a form's inherits chain is broken
+
+    Args:
+        config: The whole config file.
+        form_code: The form being loaded.
+        config_file_path: Where it came from, for the message.
+
+    Raises:
+        ConfigError: if a form in the chain inherits a block that is not in the
+            file, or the chain loops.
+    """
+    seen = []
+    code = form_code
+    while code is not None:
+        if code in seen:
+            raise ConfigError(
+                f"{config_file_path.name}, form {form_code!r}: inherits loops:"
+                f" {' -> '.join([*seen, code])}"
+            )
+        seen.append(code)
+        parent = (config.get(code) or {}).get("inherits")
+        if parent is not None and parent not in config:
+            raise ConfigError(
+                f"{config_file_path.name}, form {form_code!r}: {code} inherits"
+                f" {parent!r}, which is not a block in the file (blocks:"
+                f" {', '.join(config)})"
+            )
+        code = parent
+
+
 def _check_name(table_name: str | None, name: str, where: str, problems: list) -> None:
-    """Add a problem if name doesn't resolve against the form's table"""
+    """Add a problem if name doesn't resolve against the form's table
+
+    Nothing is checked when the form has no usable table_name; that problem is
+    reported once on its own.
+    """
     if table_name is None:
         return
     try:
@@ -694,7 +753,7 @@ def _allowed_values(table_name: str | None, name: str) -> list[str] | None:
         table, attribute = resolve_standard_name(table_name, name)
     except ConfigError:
         return None
-    return _data_schema().schema[table].enum_columns.get(attribute)
+    return default_schema().schema[table].enum_columns.get(attribute)
 
 
 def _listed(names: set[str]) -> str:

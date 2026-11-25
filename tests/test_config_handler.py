@@ -63,6 +63,7 @@ def exclude_column_order_config(tmp_path):
             ],
             "read_csv_params": {"sep": ",", "encoding": "latin-1"},
             "include_column_order": False,
+            "state_code": "zz",
             "table_name": "Transaction",
             "path_pattern": ".*",
         }
@@ -89,6 +90,7 @@ def explicit_header_config(tmp_path):
             ],
             "include_column_order": False,
             "read_csv_params": {"sep": ",", "encoding": "latin-1", "header": 1},
+            "state_code": "zz",
             "table_name": "Transaction",
             "path_pattern": ".*",
         }
@@ -287,6 +289,7 @@ def inheritance_config(tmp_path):
                     "standard_name": "donor_id",
                 },
             ],
+            "state_code": "zz",
             "table_name": "Transaction",
             "path_pattern": ".*",
         },
@@ -438,6 +441,7 @@ def minimal_config() -> dict:
     """A Transaction form that passes validation, to break one thing at a time"""
     return {
         "contributions": {
+            "state_code": "zz",
             "table_name": "Transaction",
             "path_pattern": "(?i)^contrib.*\\.csv$",
             "state_code_columns": ["reported_state"],
@@ -580,7 +584,7 @@ def set_in(config, *path_and_value):
         (lambda c: c["contributions"].pop("table_name"), "table_name is required"),
         (
             lambda c: set_in(c, "contributions", "table_name", "Transactions"),
-            "'Transactions' is not a table in table.yaml",
+            "table_name 'Transactions' is not a table in table.yaml (one of",
         ),
         (lambda c: c["contributions"].pop("path_pattern"), "path_pattern is required"),
         (
@@ -637,6 +641,150 @@ def set_in(config, *path_and_value):
         (
             lambda c: set_in(c, "contributions", "year_column", "YEAR"),
             "year_column 'YEAR' is not a raw column",
+        ),
+        (
+            lambda c: set_in(c, "contributions", "year_filter_filepath_regex", "(x"),
+            "year_filter_filepath_regex '(x' is not a valid regex",
+        ),
+        (
+            lambda c: set_in(
+                c, "contributions", "year_filter_filepath_regex", "\\d{4}"
+            ),
+            "needs a capture group around the year",
+        ),
+        (
+            lambda c: set_in(c, "contributions", "read_csv_params", ["sep"]),
+            "read_csv_params must be a mapping",
+        ),
+        (
+            lambda c: set_in(c, "contributions", "include_column_order", "yes"),
+            "include_column_order must be true or false",
+        ),
+        (
+            lambda c: set_in(c, "contributions", "column_details", ["FILERID"]),
+            "column_details must be a list of mappings",
+        ),
+        (
+            lambda c: c["contributions"]["column_details"].append({"raw_name": "X"}),
+            "column {'raw_name': 'X'}: needs raw_name and type",
+        ),
+        (
+            lambda c: set_in(
+                c, "contributions", "state_code_columns", "reported_state"
+            ),
+            "state_code_columns must be a list of standard names",
+        ),
+        (
+            lambda c: set_in(
+                c, "contributions", "state_code_columns", ["reported_stat"]
+            ),
+            "state_code_columns: 'reported_stat': 'reported_stat' is not an attribute",
+        ),
+        (
+            lambda c: set_in(c, "contributions", "new_empty_columns", ["descriptoin"]),
+            "new_empty_columns: 'descriptoin': 'descriptoin' is not an attribute",
+        ),
+        (
+            lambda c: set_in(c, "contributions", "duplicate_columns", ["amount"]),
+            "duplicate_columns must map a standard name to a list of names",
+        ),
+        (
+            lambda c: set_in(
+                c, "contributions", "duplicate_columns", {"amount": "amount-2"}
+            ),
+            "duplicate_columns: 'amount' must map to a list of names",
+        ),
+        (
+            lambda c: set_in(
+                c, "contributions", "duplicate_columns", {"amount": ["amoutn"]}
+            ),
+            "duplicate_columns 'amount': 'amoutn': 'amoutn' is not an attribute",
+        ),
+        (
+            lambda c: set_in(c, "contributions", "enum_mapper", ["x"]),
+            "enum_mapper must map standard names to mappings of values",
+        ),
+        (
+            lambda c: set_in(
+                c, "contributions", "enum_mapper", {"donor--transactor_type": ["I"]}
+            ),
+            "enum_mapper: 'donor--transactor_type' must map raw values to standard values",
+        ),
+        (
+            lambda c: set_in(c, "contributions", "null_values", ["amount"]),
+            "null_values must map standard names to lists of values",
+        ),
+        (
+            lambda c: set_in(c, "contributions", "null_values", {"amount": 0.0}),
+            "null_values: 'amount' must map to a list of values",
+        ),
+        (
+            lambda c: set_in(c, "contributions", "filter", ["NOTE"]),
+            "filter must map raw column names",
+        ),
+        (
+            lambda c: set_in(c, "contributions", "filter", {"NOTE": "void"}),
+            "filter: 'NOTE' must be a list, or NOT: [values]",
+        ),
+        (
+            lambda c: set_in(c, "contributions", "overloaded_columns", ["NAME"]),
+            "overloaded_columns must map raw column names to pattern and filter",
+        ),
+        (
+            lambda c: set_in(
+                c,
+                "contributions",
+                "overloaded_columns",
+                {"NAMEX": {"pattern": "(?P<NOTE>.*)"}},
+            ),
+            "overloaded_columns: 'NAMEX' is not a raw column",
+        ),
+        (
+            lambda c: set_in(c, "contributions", "overloaded_columns", {"NAME": {}}),
+            "overloaded_columns: 'NAME' needs a pattern",
+        ),
+        (
+            lambda c: set_in(
+                c,
+                "contributions",
+                "overloaded_columns",
+                {"NAME": {"pattern": "(unclosed"}},
+            ),
+            "overloaded_columns: 'NAME' pattern does not compile",
+        ),
+        (
+            lambda c: set_in(
+                c,
+                "contributions",
+                "overloaded_columns",
+                {"NAME": {"pattern": "(?P<NOTE>.*)", "filter": {"TYP": ["x"]}}},
+            ),
+            "overloaded_columns: 'NAME' filters on 'TYP'",
+        ),
+        (
+            lambda c: set_in(c, "contributions", "path_pattern", 123),
+            "path_pattern 123 is not a valid regex",
+        ),
+        (
+            lambda c: c["contributions"].pop("state_code"),
+            "state_code is required",
+        ),
+        (
+            lambda c: set_in(
+                c, "contributions", "column_details", 1, "standard_name", "donor--id"
+            ),
+            "a related record's id is named donor_id, not donor--id",
+        ),
+        (
+            lambda c: set_in(
+                c,
+                "contributions",
+                "column_details",
+                1,
+                "standard_name",
+                "donor--address--city-2",
+            ),
+            "only an attribute of the form's own table can repeat",
         ),
     ],
 )
@@ -742,3 +890,113 @@ def test_resolve_standard_name_rejects_an_unknown_table():
         utils.standardize.config.ConfigError, match="'Donor' is not a table"
     ):
         utils.standardize.config.resolve_standard_name("Donor", "amount")
+
+
+@pytest.mark.parametrize(
+    "break_it",
+    [
+        lambda c: set_in(c, "contributions", "table_name", "Transactions"),
+        lambda c: c["contributions"].pop("table_name"),
+        lambda c: c["contributions"].pop("path_pattern"),
+        lambda c: c["contributions"].pop("state_code"),
+    ],
+)
+def test_a_form_level_mistake_is_reported_once(tmp_path, break_it):
+    """A bad or missing table_name doesn't repeat for every column"""
+    config = minimal_config()
+    break_it(config)
+    with pytest.raises(utils.standardize.config.ConfigError) as error:
+        ConfigHandler("contributions", config_file_path=write_config(tmp_path, config))
+    assert str(error.value).count("\n  ") == 1, str(error.value)
+
+
+def inheriting_config() -> dict:
+    """minimal_config() split into a meta base and a form, the shape every state uses"""
+    config = {"base": {"meta": True, "state_code": "zz"}, **minimal_config()}
+    config["contributions"].pop("state_code")
+    config["contributions"]["inherits"] = "base"
+    return config
+
+
+def test_the_inheriting_shape_is_valid(tmp_path):
+    handler = ConfigHandler(
+        "contributions", config_file_path=write_config(tmp_path, inheriting_config())
+    )
+    assert handler.state_code == "zz"
+
+
+@pytest.mark.parametrize(
+    ("key", "message"),
+    [
+        ("table_name", "table_name is required"),
+        ("path_pattern", "path_pattern is required"),
+    ],
+)
+def test_required_keys_are_required_under_a_meta_base(tmp_path, key, message):
+    """A form that inherits a meta base is not itself meta"""
+    config = inheriting_config()
+    config["contributions"].pop(key)
+    with pytest.raises(utils.standardize.config.ConfigError, match=message):
+        ConfigHandler("contributions", config_file_path=write_config(tmp_path, config))
+
+
+def test_state_code_is_required_under_a_meta_base(tmp_path):
+    config = inheriting_config()
+    config["base"].pop("state_code")
+    with pytest.raises(
+        utils.standardize.config.ConfigError, match="state_code is required"
+    ):
+        ConfigHandler("contributions", config_file_path=write_config(tmp_path, config))
+
+
+def test_a_meta_block_needs_no_table_or_path(tmp_path):
+    ConfigHandler("base", config_file_path=write_config(tmp_path, inheriting_config()))
+
+
+def test_an_unknown_parent_is_reported_with_the_blocks_in_the_file(tmp_path):
+    config = inheriting_config()
+    config["contributions"]["inherits"] = "bsae"
+    with pytest.raises(
+        utils.standardize.config.ConfigError,
+        match=re.escape(
+            "zz.yaml, form 'contributions': contributions inherits 'bsae', which is not a block in the file (blocks: base, contributions)"
+        ),
+    ):
+        ConfigHandler("contributions", config_file_path=write_config(tmp_path, config))
+
+
+def test_an_inheritance_loop_is_reported(tmp_path):
+    config = inheriting_config()
+    config["base"]["inherits"] = "contributions"
+    with pytest.raises(
+        utils.standardize.config.ConfigError,
+        match="inherits loops: contributions -> base -> contributions",
+    ):
+        ConfigHandler("contributions", config_file_path=write_config(tmp_path, config))
+
+
+@pytest.mark.parametrize(
+    ("table", "name", "message"),
+    [
+        (
+            "Transaction",
+            "donor--transaction_direction",
+            "'transaction_direction' is not an attribute of Transactor",
+        ),
+        ("Transaction", "donor--id", "a related record's id is named donor_id"),
+        (
+            "Transaction",
+            "donor--address--city-2",
+            "only an attribute of the form's own table can repeat",
+        ),
+        ("Transaction", "amount--x", "'amount' is not a relation of Transaction"),
+        (
+            "Transactor",
+            "organization_name--x",
+            "'organization_name' is not a relation of Transactor",
+        ),
+    ],
+)
+def test_resolve_standard_name_rejects(table, name, message):
+    with pytest.raises(utils.standardize.config.ConfigError, match=re.escape(message)):
+        utils.standardize.config.resolve_standard_name(table, name)

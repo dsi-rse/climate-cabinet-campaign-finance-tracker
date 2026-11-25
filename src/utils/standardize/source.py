@@ -10,8 +10,8 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-from utils.constants import DEFAULT_SCHEMA_PATH, RAW_DATA_DIRECTORY
-from utils.schema import DataSchema
+from utils.constants import RAW_DATA_DIRECTORY
+from utils.schema import default_schema
 from utils.standardize.config import ConfigHandler
 
 logger = logging.getLogger(__name__)
@@ -60,7 +60,7 @@ def _table_attributes(table_name: str) -> frozenset[str]:
         The table's attribute names, or an empty set if the schema has no such
         table.
     """
-    schema = DataSchema(DEFAULT_SCHEMA_PATH).schema
+    schema = default_schema().schema
     if table_name not in schema:
         return frozenset()
     return frozenset(schema[table_name].attributes)

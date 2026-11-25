@@ -5,11 +5,13 @@ here TODO
 """
 
 import re
-from functools import cached_property
+from functools import cache, cached_property
 from pathlib import Path
 
 import pandas as pd
 import yaml
+
+from utils.constants import DEFAULT_SCHEMA_PATH
 
 UNNORMALIZED_FLAG = 0
 FIRST_NORMAL_FORM_FLAG = 1
@@ -396,3 +398,13 @@ class DataSchema:
                     )
 
         return errors
+
+
+@cache
+def default_schema() -> DataSchema:
+    """The schema in DEFAULT_SCHEMA_PATH (table.yaml), parsed and validated once
+
+    Returns:
+        The DataSchema every step shares.
+    """
+    return DataSchema(DEFAULT_SCHEMA_PATH)
